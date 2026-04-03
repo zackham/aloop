@@ -1,6 +1,6 @@
 # aloop
 
-A model-agnostic, embeddable agent loop. Use any LLM, extend through hooks, embed as a Python library or expose as an ACP server. No vendor lock-in, no framework opinions.
+A provider-agnostic, embeddable agent loop. Use any LLM from any provider, extend through hooks, embed as a Python library or expose as an ACP server. No vendor lock-in, no framework opinions.
 
 ```python
 from aloop import AgentLoopBackend, EventType
@@ -25,7 +25,7 @@ aloop "What files are in this directory?"
 |  | Claude Code | Codex CLI | Aider | LangChain | **aloop** |
 |---|---|---|---|---|---|
 | Embeddable as a library | No | No | No | Yes (heavy) | **Yes (lightweight)** |
-| Model-agnostic | No | No | Partial | Yes | **Yes — 5 tested providers** |
+| Provider-agnostic | No | No | Partial | Yes | **Yes — 5 tested providers** |
 | Custom tools without forking | No | No | No | Framework abstractions | **Project-local hooks** |
 | ACP interop (editors, orchestrators) | Native | Via adapter | No | No | **Built-in** |
 | Opinionated about your workflow | Very | Very | Very | Very | **Minimal** |

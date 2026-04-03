@@ -1,4 +1,4 @@
-"""Agent loop backend — model-agnostic, multi-provider."""
+"""Agent loop backend — provider-agnostic, multi-provider."""
 
 from __future__ import annotations
 
