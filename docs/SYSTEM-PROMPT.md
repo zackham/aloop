@@ -170,12 +170,7 @@ If the project has an `AGENTS.md` (or `CLAUDE.md`), its content is appended at t
 
 ## Context Injection
 
-Beyond the system prompt, aloop can inject dynamic context via hooks:
-
-- **`gather_context` hooks** — return strings that are appended to the system prompt at runtime. Use for daily notes, environment state, or dynamic instructions.
-- **Knowledge injections** — synthetic message pairs injected at session start for high-attention context placement.
-
-These are project-specific via `.aloop/hooks/`. See [HOOKS.md](HOOKS.md).
+Beyond the static system prompt, `gather_context` hooks can append dynamic content at runtime — daily notes, environment state, or conditional instructions. These are project-specific via `.aloop/hooks/`. See [HOOKS.md](HOOKS.md).
 
 ## Caching
 

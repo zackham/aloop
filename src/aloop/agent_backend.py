@@ -131,18 +131,6 @@ class AgentLoopBackend:
             context_kwargs={k: v for k, v in kwargs.items() if k.startswith("topic_")},
         )
 
-        # Inject knowledge messages for fresh sessions
-        inject_context = bool(kwargs.get("inject_context", True))
-        if inject_context and (not session or not session.messages):
-            from .system_prompt import build_knowledge_injections
-            knowledge = build_knowledge_injections(
-                **{k: v for k, v in kwargs.items() if k.startswith("topic_")},
-            )
-            if knowledge:
-                messages = knowledge + messages
-            if injection_messages:
-                messages = injection_messages + messages
-
         tool_schemas = [t.to_schema() for t in tools] if tools else None
         accumulated_text = ""
 

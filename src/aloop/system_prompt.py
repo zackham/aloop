@@ -320,12 +320,3 @@ def build_system_prompt(
     return "\n\n---\n\n".join(s for s in sections if s)
 
 
-def build_knowledge_injections(
-    project_root: Path | None = None,
-    **kwargs,
-) -> list[dict]:
-    """Build synthetic message pairs for knowledge injection.
-
-    Returns empty list by default.
-    """
-    return []
