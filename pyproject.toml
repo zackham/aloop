@@ -1,0 +1,46 @@
+[project]
+name = "aloop"
+dynamic = ["version"]
+description = "Project-independent agent loop harness with tool access, skills, and hooks"
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "Zack Ham", email = "zackham@gmail.com" }
+]
+requires-python = ">=3.12"
+keywords = ["agent", "llm", "openrouter", "coding-agent", "acp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "httpx>=0.27",
+    "agent-client-protocol>=0.9.0",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.20.0,<2"]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[project.urls]
+Repository = "https://github.com/zackham/aloop"
+
+[project.scripts]
+aloop = "aloop.cli:main_sync"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/aloop/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aloop"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
