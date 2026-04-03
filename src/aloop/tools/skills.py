@@ -4,6 +4,14 @@ Progressive skill loading:
 - Short listing of all skills injected as context (~1% of context budget)
 - load_skill tool loads full SKILL.md content on demand
 - Model decides when to invoke based on description
+
+Skill discovery order (merged, not first-match):
+  Global: ~/.aloop/skills/
+  Project: .aloop/skills/ > .agents/skills/ > .claude/skills/
+
+All directories are scanned. Skills from all found directories are merged.
+On name collision, project overrides global; higher-priority project dir
+overrides lower-priority.
 """
 
 from __future__ import annotations
@@ -15,19 +23,30 @@ from ..tools_base import ToolDef, ToolResult
 from .. import get_project_root
 
 
-def _find_skills_dir() -> Path:
-    """Find skills directory: .agents/skills/ first, then .claude/skills/."""
+def _find_all_skills_dirs() -> list[Path]:
+    """Find all skills directories, in priority order (highest first).
+
+    Project dirs first (highest to lowest priority), then global.
+    """
     root = get_project_root()
+    dirs: list[Path] = []
+
+    # Project skill dirs (highest priority first)
     for candidate in [
+        root / ".aloop" / "skills",
         root / ".agents" / "skills",
         root / ".claude" / "skills",
     ]:
         if candidate.is_dir():
-            return candidate
-    return root / ".claude" / "skills"
+            dirs.append(candidate)
 
+    # Global skills (lowest priority)
+    global_dir = Path.home() / ".aloop" / "skills"
+    if global_dir.is_dir():
+        dirs.append(global_dir)
 
-SKILLS_DIR = _find_skills_dir()
+    return dirs
+
 
 MAX_LISTING_DESC_CHARS = 250
 
@@ -47,30 +66,65 @@ def _parse_frontmatter(text: str) -> dict[str, str]:
     return fm
 
 
-def _discover_skills() -> dict[str, dict]:
-    """Scan skills directory and return {name: {description, path}} for each skill."""
+def _discover_skills(
+    skills_dirs: list[Path] | None = None,
+    disabled_skills: set[str] | None = None,
+) -> dict[str, dict]:
+    """Scan skills directories and return {name: {description, path, source}} for each skill.
+
+    Directories are scanned in priority order. First occurrence of a name wins
+    (higher-priority directory overrides lower).
+    """
+    if skills_dirs is None:
+        skills_dirs = _find_all_skills_dirs()
+    if disabled_skills is None:
+        disabled_skills = _load_disabled_skills()
+
     skills: dict[str, dict] = {}
-    if not SKILLS_DIR.is_dir():
-        return skills
 
-    for skill_dir in sorted(SKILLS_DIR.iterdir()):
-        skill_md = skill_dir / "SKILL.md"
-        if not skill_md.exists():
-            continue
-        try:
-            text = skill_md.read_text(encoding="utf-8")
-        except OSError:
+    for skills_dir in skills_dirs:
+        if not skills_dir.is_dir():
             continue
 
-        fm = _parse_frontmatter(text)
-        name = fm.get("name") or skill_dir.name
-        desc = fm.get("description", "")
-        skills[name] = {
-            "description": desc,
-            "path": str(skill_md),
-        }
+        for skill_dir in sorted(skills_dir.iterdir()):
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.exists():
+                continue
+            try:
+                text = skill_md.read_text(encoding="utf-8")
+            except OSError:
+                continue
+
+            fm = _parse_frontmatter(text)
+            name = fm.get("name") or skill_dir.name
+            desc = fm.get("description", "")
+
+            # Skip disabled skills
+            if name in disabled_skills:
+                continue
+
+            # First occurrence wins (higher priority dir first)
+            if name in skills:
+                continue
+
+            skills[name] = {
+                "description": desc,
+                "path": str(skill_md),
+                "source": str(skills_dir),
+            }
 
     return skills
+
+
+def _load_disabled_skills() -> set[str]:
+    """Load disabled_skills from merged config."""
+    try:
+        from ..system_prompt import _load_aloop_config
+        from .. import get_project_root
+        config = _load_aloop_config(get_project_root())
+        return set(config.get("disabled_skills", []))
+    except Exception:
+        return set()
 
 
 # Cache after first scan
@@ -119,6 +173,21 @@ def build_skill_listing(max_chars: int = 8_000) -> str:
 def list_skill_names() -> list[str]:
     """Return sorted list of available skill names."""
     return sorted(_get_skills().keys())
+
+
+def get_skills_by_source() -> dict[str, list[str]]:
+    """Return skills grouped by source directory for config show display.
+
+    Returns {dir_path: [skill_name, ...]} preserving discovery order.
+    """
+    skills = _get_skills()
+    by_source: dict[str, list[str]] = {}
+    for name, info in skills.items():
+        source = info.get("source", "unknown")
+        if source not in by_source:
+            by_source[source] = []
+        by_source[source].append(name)
+    return by_source
 
 
 # --- Tool definition ---

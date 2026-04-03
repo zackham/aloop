@@ -1,7 +1,8 @@
 """aloop — project-independent system prompt builder.
 
 The harness is generic. Project identity comes from AGENTS.md (or CLAUDE.md).
-Skills from .agents/skills/ (or .claude/skills/). Config from .aloop/config.json.
+Skills from .aloop/skills/, .agents/skills/, or .claude/skills/. Config from
+~/.aloop/config.json (global) deep-merged with .aloop/config.json (project).
 
 Architecture:
   The system prompt is assembled from named sections in fixed order:
@@ -19,7 +20,10 @@ Architecture:
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Default section texts
@@ -88,38 +92,88 @@ from . import get_project_root as _get_root
 
 
 # ---------------------------------------------------------------------------
-# Project file discovery
+# Unified instruction file discovery chain
 # ---------------------------------------------------------------------------
+
+# Single chain used by both template mode ({{agents_md}}) and section mode.
+# First match wins.
+INSTRUCTION_CANDIDATES = [
+    "ALOOP.md",
+    "AGENTS.md",
+    ".agents/AGENTS.md",
+    "CLAUDE.md",
+    ".claude/CLAUDE.md",
+]
+
+
+def _find_instruction_file(root: Path) -> tuple[Path | None, list[Path]]:
+    """Find the project instruction file using the unified discovery chain.
+
+    Returns (found_path, skipped_paths) where skipped_paths are lower-priority
+    candidates that also exist.
+    """
+    found: Path | None = None
+    skipped: list[Path] = []
+
+    for rel in INSTRUCTION_CANDIDATES:
+        path = root / rel
+        if path.exists():
+            if found is None:
+                found = path
+            else:
+                skipped.append(path)
+
+    if found and skipped:
+        used_name = found.relative_to(root)
+        skip_names = [str(s.relative_to(root)) for s in skipped]
+        log.debug(
+            "Using %s (%s also exist but lower priority)",
+            used_name,
+            ", ".join(skip_names),
+        )
+
+    return found, skipped
+
 
 def _find_agents_md(root: Path) -> str:
     """Read the project's agent instructions file.
 
-    Checks: AGENTS.md, .agents/AGENTS.md, CLAUDE.md, .claude/CLAUDE.md.
+    Uses unified discovery chain:
+    ALOOP.md -> AGENTS.md -> .agents/AGENTS.md -> CLAUDE.md -> .claude/CLAUDE.md
     """
-    candidates = [
-        root / "AGENTS.md",
-        root / ".agents" / "AGENTS.md",
-        root / "CLAUDE.md",
-        root / ".claude" / "CLAUDE.md",
-    ]
-    for path in candidates:
-        if path.exists():
-            try:
-                return path.read_text(encoding="utf-8")
-            except OSError:
-                continue
-    return ""
+    found, _ = _find_instruction_file(root)
+    if found is None:
+        return ""
+    try:
+        return found.read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
-def _find_skills_dir(root: Path) -> Path | None:
-    """Find the project's skills directory."""
+def _find_skills_dirs(root: Path) -> list[Path]:
+    """Find all project skills directories (for merging).
+
+    Checks: .aloop/skills/, .agents/skills/, .claude/skills/.
+    Returns all that exist, in priority order (highest first).
+    """
+    dirs: list[Path] = []
     for candidate in [
+        root / ".aloop" / "skills",
         root / ".agents" / "skills",
         root / ".claude" / "skills",
     ]:
         if candidate.is_dir():
-            return candidate
-    return None
+            dirs.append(candidate)
+    return dirs
+
+
+def _find_skills_dir(root: Path) -> Path | None:
+    """Find the highest-priority project skills directory.
+
+    For backward compat with code that expects a single dir.
+    """
+    dirs = _find_skills_dirs(root)
+    return dirs[0] if dirs else None
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -136,20 +190,43 @@ def _strip_frontmatter(text: str) -> str:
 # Config loading
 # ---------------------------------------------------------------------------
 
-def _load_aloop_config(root: Path) -> dict:
-    """Load .aloop/config.json if it exists.
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Deep merge two dicts. Override wins on key collision.
 
-    Returns the full config dict. Key fields:
+    Nested dicts are recursively merged. Non-dict values are replaced.
+    """
+    result = dict(base)
+    for key, value in override.items():
+        if (
+            key in result
+            and isinstance(result[key], dict)
+            and isinstance(value, dict)
+        ):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _load_json_file(path: Path) -> dict:
+    """Load a JSONC file (JSON with comments), returning empty dict on missing/invalid."""
+    from .utils import load_jsonc
+    return load_jsonc(path)
+
+
+def _load_aloop_config(root: Path) -> dict:
+    """Load merged config: ~/.aloop/config.json (global) deep-merged with
+    .aloop/config.json (project). Project wins on key collision.
+
+    Returns the full merged config dict. Key fields:
       system_prompt: str — if starts with "file:", read that file as template
       sections: dict — section overrides (fallback mode)
+      disabled_hooks: list[str] — hook filenames to skip
+      disabled_skills: list[str] — skill names to skip
     """
-    config_path = root / ".aloop" / "config.json"
-    if not config_path.exists():
-        return {}
-    try:
-        return json.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+    global_config = _load_json_file(Path.home() / ".aloop" / "config.json")
+    project_config = _load_json_file(root / ".aloop" / "config.json")
+    return _deep_merge(global_config, project_config)
 
 
 def _load_template(root: Path, config: dict) -> str | None:
@@ -192,38 +269,47 @@ def _build_tool_section(tools: list | None) -> str:
 
 
 def _build_skill_section(root: Path) -> str:
-    skills_dir = _find_skills_dir(root)
-    if not skills_dir:
+    skills_dirs = _find_skills_dirs(root)
+    if not skills_dirs:
         return ""
 
+    # Merge skills across all directories. Higher-priority dirs listed first,
+    # so later dirs only add skills not already seen (project overrides global).
+    seen_names: set[str] = set()
     lines: list[str] = []
-    for skill_dir in sorted(skills_dir.iterdir()):
-        skill_md = skill_dir / "SKILL.md"
-        if not skill_md.exists():
-            continue
-        try:
-            text = skill_md.read_text(encoding="utf-8")
-        except OSError:
-            continue
 
-        name = skill_dir.name
-        desc = ""
-        if text.startswith("---"):
-            end = text.find("---", 3)
-            if end != -1:
-                for line in text[3:end].strip().splitlines():
-                    if ":" in line:
-                        key, _, value = line.partition(":")
-                        key = key.strip()
-                        value = value.strip().strip('"').strip("'")
-                        if key == "name":
-                            name = value
-                        elif key == "description":
-                            desc = value
+    for skills_dir in skills_dirs:
+        for skill_dir in sorted(skills_dir.iterdir()):
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.exists():
+                continue
+            try:
+                text = skill_md.read_text(encoding="utf-8")
+            except OSError:
+                continue
 
-        if len(desc) > 250:
-            desc = desc[:247] + "..."
-        lines.append(f"- {name}: {desc}")
+            name = skill_dir.name
+            desc = ""
+            if text.startswith("---"):
+                end = text.find("---", 3)
+                if end != -1:
+                    for line in text[3:end].strip().splitlines():
+                        if ":" in line:
+                            key, _, value = line.partition(":")
+                            key = key.strip()
+                            value = value.strip().strip('"').strip("'")
+                            if key == "name":
+                                name = value
+                            elif key == "description":
+                                desc = value
+
+            if name in seen_names:
+                continue
+            seen_names.add(name)
+
+            if len(desc) > 250:
+                desc = desc[:247] + "..."
+            lines.append(f"- {name}: {desc}")
 
     if not lines:
         return ""
@@ -267,15 +353,14 @@ def build_system_prompt(
         skill_section = _build_skill_section(root)
         template = template.replace("{{skills}}", skill_section if skill_section else "No skills found.")
 
-        # {{agents_md}} = ALOOP.md or AGENTS.md body (operational context)
+        # {{agents_md}} = unified instruction file discovery (body only)
         agents_md_body = ""
-        for candidate in [root / "ALOOP.md", root / "AGENTS.md", root / "CLAUDE.md"]:
-            if candidate.exists():
-                try:
-                    agents_md_body = _strip_frontmatter(candidate.read_text(encoding="utf-8"))
-                    break
-                except OSError:
-                    continue
+        found, _ = _find_instruction_file(root)
+        if found:
+            try:
+                agents_md_body = _strip_frontmatter(found.read_text(encoding="utf-8"))
+            except OSError:
+                pass
         template = template.replace("{{agents_md}}", agents_md_body)
 
         return template
@@ -311,7 +396,7 @@ def build_system_prompt(
         else:
             sections.append(DEFAULTS[name])
 
-    # Project context: AGENTS.md body
+    # Project context: instruction file body
     agents_md = _find_agents_md(root)
     body = _strip_frontmatter(agents_md)
     if body:

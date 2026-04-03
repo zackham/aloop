@@ -1,6 +1,6 @@
 """ACP (Agent Client Protocol) server for aloop.
 
-Wraps AgentLoopBackend as an ACP agent, translating InferenceEvents
+Wraps ALoop as an ACP agent, translating InferenceEvents
 to ACP session notifications. Run via `aloop --acp`.
 """
 
@@ -47,7 +47,7 @@ from acp.schema import (
 )
 
 from . import __version__
-from .agent_backend import AgentLoopBackend
+from .agent_backend import ALoop
 from .compaction import get_compaction_settings
 from .models import get_model
 from .session import AgentSession
@@ -86,27 +86,29 @@ def _resolve_api_key() -> str:
 class _SessionState:
     """Internal state for a single ACP session."""
 
-    __slots__ = ("session_id", "cwd", "backend", "agent_session", "cancel_event")
+    __slots__ = ("session_id", "cwd", "backend", "agent_session", "cancel_event", "mode")
 
     def __init__(
         self,
         session_id: str,
         cwd: str,
-        backend: AgentLoopBackend,
+        backend: ALoop,
         agent_session: AgentSession | None = None,
+        mode: str | None = None,
     ):
         self.session_id = session_id
         self.cwd = cwd
         self.backend = backend
         self.agent_session = agent_session
         self.cancel_event = asyncio.Event()
+        self.mode = mode
 
 
 class AloopAgent:
-    """ACP server wrapping AgentLoopBackend.
+    """ACP server wrapping ALoop.
 
     Implements the acp.Agent protocol. Each ACP session gets its own
-    AgentLoopBackend instance (stateful: token counters, compaction).
+    ALoop instance (stateful: token counters, compaction).
     """
 
     def __init__(self, model: str | None = None):
@@ -261,6 +263,55 @@ class AloopAgent:
         return CloseSessionResponse()
 
     async def set_session_mode(self, mode_id: str, session_id: str, **kwargs: Any) -> None:
+        """Change the mode for an active session.
+
+        Loads mode config, reconfigures the session's backend
+        (model, provider, compaction), and stores the mode name.
+        The mode's system_prompt/system_prompt_file takes effect on next prompt.
+        """
+        state = self._sessions.get(session_id)
+        if state is None:
+            return None
+
+        from .config import load_mode, resolve_mode_system_prompt
+        from .system_prompt import _load_aloop_config
+        from . import get_project_root
+
+        project_root = get_project_root()
+        project_config = _load_aloop_config(project_root)
+
+        # Validates mode exists (raises ValueError if not)
+        mode_config = load_mode(mode_id, project_config)
+
+        # Rebuild backend if mode specifies model/provider
+        api_key = _resolve_api_key()
+        model_id = mode_config.get("model", self._model)
+        backend = ALoop(
+            model=model_id,
+            api_key=api_key,
+            compaction_settings=get_compaction_settings(),
+        )
+
+        # Apply mode's compaction if specified
+        if "compaction" in mode_config:
+            from .compaction import CompactionSettings
+            mc = mode_config["compaction"]
+            backend.compaction_settings = CompactionSettings(
+                enabled=mc.get("enabled", True),
+                reserve_tokens=mc.get("reserve_tokens", backend.compaction_settings.reserve_tokens),
+                keep_recent_tokens=mc.get("keep_recent_tokens", backend.compaction_settings.keep_recent_tokens),
+            )
+
+        if "max_iterations" in mode_config:
+            backend.max_iterations = mode_config["max_iterations"]
+            backend.config.max_iterations = mode_config["max_iterations"]
+
+        state.backend = backend
+        state.mode = mode_id
+
+        # Track mode on the backend's session_modes dict
+        state.backend._session_modes[session_id] = mode_id
+
         return None
 
     async def set_session_model(self, model_id: str, session_id: str, **kwargs: Any) -> None:
@@ -270,7 +321,7 @@ class AloopAgent:
             return None
         # Rebuild backend with the new model
         api_key = _resolve_api_key()
-        state.backend = AgentLoopBackend(
+        state.backend = ALoop(
             model=model_id,
             api_key=api_key,
             compaction_settings=get_compaction_settings(),
@@ -297,7 +348,7 @@ class AloopAgent:
         os.environ["ALOOP_PROJECT_ROOT"] = cwd
 
         api_key = _resolve_api_key()
-        backend = AgentLoopBackend(
+        backend = ALoop(
             model=self._model,
             api_key=api_key,
             compaction_settings=get_compaction_settings(),
@@ -329,7 +380,7 @@ class AloopAgent:
             tools = tools + [load_skill_tool]
 
         stream_kw: dict[str, Any] = {
-            "session_key": session_id,
+            "session_id": session_id,
             "tools": tools,
             "system_prompt": build_system_prompt(tools=tools),
         }
@@ -390,23 +441,46 @@ class AloopAgent:
                             ),
                         )
 
-                    case EventType.COMPLETE:
-                        usage_data = event.data.get("usage") or {}
-                        input_tokens = usage_data.get("input_tokens", 0)
-                        output_tokens = usage_data.get("output_tokens", 0)
-                        cost_usd = usage_data.get("cost_usd", 0)
-                        model_config = backend.model_config
+                    case EventType.TOOL_DELTA:
+                        tool_call_id = event.data.get("id", "")
+                        content = event.data.get("content", "")
+                        if tool_call_id and content:
+                            await conn.session_update(
+                                session_id=session_id,
+                                update=update_tool_call(
+                                    tool_call_id=tool_call_id,
+                                    status="in_progress",
+                                    content=[tool_content(text_block(content))],
+                                ),
+                            )
 
+                    case EventType.TURN_END:
+                        # Emit per-turn usage update
+                        turn_input = event.data.get("input_tokens", 0)
+                        turn_output = event.data.get("output_tokens", 0)
+                        turn_cost = event.data.get("cost_usd", 0) or 0
+                        model_config = backend.model_config
                         await conn.session_update(
                             session_id=session_id,
                             update=UsageUpdate(
                                 session_update="usage_update",
                                 size=model_config.context_window,
-                                used=input_tokens + output_tokens,
-                                cost=Cost(amount=cost_usd, currency="USD"),
+                                used=turn_input + turn_output,
+                                cost=Cost(amount=turn_cost, currency="USD"),
                             ),
                         )
+
+                    case EventType.LOOP_END:
                         return "end_turn"
+
+                    case EventType.COMPACTION:
+                        msgs_before = event.data.get("messages_before", 0)
+                        msgs_after = event.data.get("messages_after", 0)
+                        tokens_saved = event.data.get("tokens_saved", 0)
+                        log.info(
+                            "Compaction in session %s: %d→%d messages, %d tokens saved",
+                            session_id, msgs_before, msgs_after, tokens_saved,
+                        )
 
                     case EventType.ERROR:
                         msg = event.data.get("message", "Unknown error")
@@ -414,7 +488,7 @@ class AloopAgent:
                         return "end_turn"
 
                     case _:
-                        # TURN_START, TURN_END, etc. — no ACP equivalent
+                        # TURN_START, LOOP_START, etc. — no ACP equivalent
                         pass
 
         except asyncio.CancelledError:

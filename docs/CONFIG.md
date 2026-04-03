@@ -1,10 +1,50 @@
 # Configuration Reference
 
-aloop is configured via `.aloop/config.json` in the project root. All fields are optional.
+aloop is configured via JSONC config files (JSON with `//` and `#` comments). All fields are optional.
 
-## File Location
+## JSONC Support
 
-aloop looks for `.aloop/config.json` relative to the project root (determined by `ALOOP_PROJECT_ROOT` env var or current working directory).
+All config files support line comments:
+
+```jsonc
+{
+  // Double-slash comments
+  "provider": "openrouter",
+
+  # Hash comments
+  "model": "x-ai/grok-4.1-fast"
+
+  // Commented-out keys are ignored
+  // "system_prompt": "file:ALOOP-PROMPT.md"
+}
+```
+
+Comments inside quoted strings are preserved (e.g. `"url": "https://example.com"` works correctly).
+
+Validate all config files: `aloop config validate`
+
+## File Locations
+
+aloop loads config from two locations and deep-merges them:
+
+1. **Global**: `~/.aloop/config.json` — user-wide defaults
+2. **Project**: `.aloop/config.json` — project-specific overrides
+
+Project wins on key collision. Nested objects are recursively merged.
+
+```
+# Example: global sets provider, project overrides model
+# ~/.aloop/config.json
+{"provider": "openrouter", "model": "x-ai/grok-4.1-fast"}
+
+# .aloop/config.json
+{"model": "anthropic/claude-sonnet-4-20250514"}
+
+# Merged result:
+{"provider": "openrouter", "model": "anthropic/claude-sonnet-4-20250514"}
+```
+
+The project root is determined by `ALOOP_PROJECT_ROOT` env var or current working directory.
 
 ## Template Mode
 
@@ -21,8 +61,8 @@ The template file can contain these variables:
 | Variable | Replaced With |
 |----------|--------------|
 | `{{tools}}` | Auto-generated tool listing (name + description for each available tool) |
-| `{{skills}}` | Auto-generated skill listing from `.agents/skills/` or `.claude/skills/` |
-| `{{agents_md}}` | Body of `ALOOP.md`, `AGENTS.md`, or `CLAUDE.md` (first found, frontmatter stripped) |
+| `{{skills}}` | Auto-generated skill listing (merged from all skill directories) |
+| `{{agents_md}}` | Body of instruction file (unified discovery chain, frontmatter stripped) |
 
 ### Example Template (ALOOP-PROMPT.md)
 
@@ -122,6 +162,83 @@ may pre-authorize specific autonomous actions.
 You are an AI agent working in a project directory. Follow the
 project's instructions in the context provided below.
 ```
+
+## Modes
+
+Named mode configs that let you switch between different configurations per session. Define modes in `.aloop/config.json`:
+
+```json
+{
+  "modes": {
+    "default": {
+      "system_prompt": "You are a helpful coding agent.",
+      "tools": ["read_file", "write_file", "edit_file", "bash", "load_skill"],
+      "compaction": {"reserve_tokens": 16384, "keep_recent_tokens": 20000},
+      "model": "x-ai/grok-4.1-fast",
+      "provider": "openrouter",
+      "max_iterations": 50
+    },
+    "review": {
+      "system_prompt_file": ".aloop/prompts/reviewer.md",
+      "tools": ["read_file", "bash"],
+      "model": "x-ai/grok-4.1-fast"
+    },
+    "fast": {
+      "model": "x-ai/grok-4.1-fast",
+      "max_iterations": 10
+    }
+  }
+}
+```
+
+### Mode fields
+
+| Field | Type | Effect |
+|-------|------|--------|
+| `system_prompt` | `string` | Inline system prompt for this mode |
+| `system_prompt_file` | `string` | Path to system prompt file (relative to project root) |
+| `tools` | `list[string]` | Whitelist of tool names (filters available tools) |
+| `model` | `string` | Model ID override |
+| `provider` | `string` | Provider override |
+| `compaction` | `object` | Compaction settings override (`reserve_tokens`, `keep_recent_tokens`, etc.) |
+| `max_iterations` | `int` | Max agent loop iterations |
+
+### Mode behavior
+
+- **Flat, no inheritance.** Omitted fields fall back to constructor defaults / global config, NOT to another mode.
+- **Precedence:** explicit `stream()` kwargs > mode config > constructor defaults.
+- **Session-locked:** once a session is created with a mode, calling `stream()` with a different mode on the same session raises `ModeConflictError`.
+
+### Using modes
+
+```bash
+# CLI
+aloop --mode review "Check this PR"
+aloop --mode fast "Quick question"
+
+# Python API
+async for event in backend.stream("Review this", mode="review"):
+    ...
+
+# ACP
+await agent.set_session_mode(mode_id="review", session_id=sid)
+```
+
+## Disabling Hooks and Skills
+
+To disable specific global hooks or skills in a project, add to `.aloop/config.json`:
+
+```json
+{
+  "disabled_hooks": ["some_global_hook_filename"],
+  "disabled_skills": ["some_skill_name"]
+}
+```
+
+- `disabled_hooks`: list of hook filenames (without `.py` extension) to skip during loading
+- `disabled_skills`: list of skill names to exclude from discovery
+
+This is useful when a global hook or skill conflicts with a project's needs.
 
 ## Model Configuration
 

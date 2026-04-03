@@ -44,10 +44,11 @@ def get_compaction_settings() -> CompactionSettings:
     """
     overrides: dict = {}
 
-    # JSON config file overrides (user-editable)
+    # JSON config file overrides (user-editable, supports JSONC comments)
     if _get_compaction_config_path().exists():
         try:
-            data = json.loads(_get_compaction_config_path().read_text(encoding="utf-8"))
+            from .utils import load_jsonc
+            data = load_jsonc(_get_compaction_config_path())
             for key in ("reserve_tokens", "keep_recent_tokens",
                         "max_tool_result_chars", "compact_instructions"):
                 if key in data:

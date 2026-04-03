@@ -2,13 +2,19 @@
 
 Usage:
     aloop "prompt"                        # interactive session (auto-created)
+    aloop run "prompt"                    # explicit run subcommand
     aloop -p "prompt"                     # one-shot, print and exit
     aloop -c                              # continue last session
     aloop --resume SESSION_ID "prompt"    # resume a specific session
     aloop --model x-ai/grok-4.1-fast "prompt"
     echo "prompt" | aloop                 # pipe (one-shot)
-    aloop --output-format stream-json -p "prompt"  # NDJSON events
+    aloop serve                           # ACP server (replaces --acp)
+    aloop config show                     # show resolved configuration
+    aloop providers list                  # list available providers
+    aloop providers validate              # test a provider
     aloop update                          # self-update
+    aloop init                            # scaffold .aloop/ directory
+    aloop version                         # print version
 """
 
 from __future__ import annotations
@@ -22,7 +28,7 @@ import time
 import uuid
 from pathlib import Path
 
-from .agent_backend import AgentLoopBackend
+from .agent_backend import ALoop
 from .models import get_models
 from .system_prompt import build_system_prompt
 from .types import EventType
@@ -38,14 +44,16 @@ _RESET = "\033[0m"
 
 _STATE_FILE = Path.home() / ".aloop" / "state.json"
 
+# Known subcommands — used for implicit "run" injection
+SUBCOMMANDS = {
+    "run", "serve", "config", "providers", "update",
+    "register-acpx", "init", "version", "system-prompt",
+}
+
 
 def _load_state() -> dict:
-    if _STATE_FILE.exists():
-        try:
-            return json.loads(_STATE_FILE.read_text())
-        except (OSError, json.JSONDecodeError):
-            pass
-    return {}
+    from .utils import load_jsonc
+    return load_jsonc(_STATE_FILE)
 
 
 def _save_state(state: dict) -> None:
@@ -53,45 +61,126 @@ def _save_state(state: dict) -> None:
     _STATE_FILE.write_text(json.dumps(state))
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse CLI arguments using subparsers.
+
+    If the first positional argument is not a known subcommand and doesn't
+    start with '-', inject 'run' as the implicit default subcommand.
+    """
+    # Work on a copy of argv to avoid mutating the real sys.argv
+    if argv is None:
+        args_list = sys.argv[1:]
+    else:
+        args_list = list(argv)
+
+    # Implicit "run" injection: if first arg is not a known subcommand
+    # and not a flag, treat it as a prompt for the "run" subcommand.
+    # Also inject "run" when there are no args at all (interactive mode).
+    if not args_list or (
+        args_list[0] not in SUBCOMMANDS
+        and not args_list[0].startswith("-")
+    ):
+        args_list.insert(0, "run")
+    # Handle bare flags (e.g. "aloop -p hello", "aloop -c", "aloop --version")
+    elif args_list[0].startswith("-") and args_list[0] not in ("--version", "--help", "-h"):
+        args_list.insert(0, "run")
+
     parser = argparse.ArgumentParser(
         description="Agent loop with tool access, skills, and hooks",
         prog="aloop",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "commands:\n"
-            "  aloop update               Self-update to latest version\n"
-            "  aloop register-acpx        Register aloop with acpx for ACP integration\n"
-            "  aloop list-providers        List available API providers\n"
-            "  aloop validate-provider     Test a provider's API compatibility\n"
-            "  aloop system-prompt        Show the system prompt template\n"
-            "  aloop system-prompt --rendered  Show fully interpolated prompt"
+            "subcommands:\n"
+            "  run                  Run a prompt (default when bare prompt given)\n"
+            "  serve                Run as ACP server over stdio\n"
+            "  config show          Show resolved configuration\n"
+            "  config validate      Validate config files (JSONC parsing)\n"
+            "  providers list       List available API providers\n"
+            "  providers validate   Test a provider's API compatibility\n"
+            "  update               Self-update to latest version\n"
+            "  register-acpx        Register aloop with acpx for ACP integration\n"
+            "  init                 Scaffold .aloop/ directory\n"
+            "  version              Print version and exit\n"
+            "  system-prompt        Show system prompt template"
         ),
     )
-    parser.add_argument("prompt", nargs="?",
-                        help="Prompt text, or a command (see below)")
     parser.add_argument("--version", action="store_true", help="Show version and exit")
-    parser.add_argument("--model", "-m", default=None,
-                        help="Model ID (e.g. x-ai/grok-4.1-fast)")
-    parser.add_argument("--provider", default=None,
-                        help="API provider (default: openrouter). See aloop list-providers")
-    parser.add_argument("-p", action="store_true", dest="print_mode",
-                        help="One-shot: print response and exit (no REPL)")
-    parser.add_argument("-c", "--continue", action="store_true", dest="continue_last",
-                        help="Continue last session")
-    parser.add_argument("--resume", metavar="SESSION_ID",
-                        help="Resume a specific session by ID")
-    parser.add_argument("-s", "--session", default=None,
-                        help="Use a named session (e.g. -s refactor) instead of auto-generated ID")
-    parser.add_argument("--output-format", "-o", default="text",
-                        choices=["text", "json", "stream-json"],
-                        help="Output format (default: text)")
-    parser.add_argument("--tools", default=None, help="Comma-separated tool names")
-    parser.add_argument("--no-context", action="store_true", help="Skip context injection")
-    parser.add_argument("--max-iterations", type=int, default=50)
-    parser.add_argument("--list-models", action="store_true", help="List registered model aliases")
-    parser.add_argument("--acp", action="store_true", help="Run as ACP server (stdio)")
-    return parser.parse_args()
+
+    subparsers = parser.add_subparsers(dest="subcommand")
+
+    # --- run ---
+    run_parser = subparsers.add_parser("run", help="Run a prompt (default)")
+    run_parser.add_argument("prompt", nargs="?",
+                            help="Prompt text")
+    run_parser.add_argument("-p", action="store_true", dest="print_mode",
+                            help="One-shot: print response and exit (no REPL)")
+    run_parser.add_argument("-c", "--continue", action="store_true", dest="continue_last",
+                            help="Continue last session")
+    run_parser.add_argument("--resume", metavar="SESSION_ID",
+                            help="Resume a specific session by ID")
+    run_parser.add_argument("-s", "--session", default=None,
+                            help="Use a named session instead of auto-generated ID")
+    run_parser.add_argument("--output-format", "-o", default="text",
+                            choices=["text", "json", "stream-json"],
+                            help="Output format (default: text)")
+    run_parser.add_argument("--model", "-m", default=None,
+                            help="Model ID (e.g. x-ai/grok-4.1-fast)")
+    run_parser.add_argument("--provider", default=None,
+                            help="API provider (default: openrouter)")
+    run_parser.add_argument("--mode", default=None,
+                            help="Named mode from .aloop/config.json modes section")
+    run_parser.add_argument("--system-prompt", default=None, dest="system_prompt_override",
+                            help="Override system prompt text")
+    run_parser.add_argument("--system-prompt-file", default=None, dest="system_prompt_file",
+                            help="Override system prompt from file")
+    run_parser.add_argument("--tools", default=None,
+                            help="Comma-separated tool names")
+    run_parser.add_argument("--no-context", action="store_true",
+                            help="Skip context injection")
+    run_parser.add_argument("--max-iterations", type=int, default=50,
+                            help="Max agent loop iterations (default: 50)")
+
+    # --- serve ---
+    serve_parser = subparsers.add_parser("serve", help="Run as ACP server over stdio")
+    serve_parser.add_argument("--model", "-m", default=None,
+                              help="Model ID")
+    serve_parser.add_argument("--provider", default=None,
+                              help="API provider")
+
+    # --- config ---
+    config_parser = subparsers.add_parser("config", help="Configuration management")
+    config_sub = config_parser.add_subparsers(dest="config_action")
+    config_sub.add_parser("show", help="Show resolved configuration")
+    config_sub.add_parser("validate", help="Validate config files (JSONC parsing)")
+
+    # --- providers ---
+    providers_parser = subparsers.add_parser("providers", help="Provider management")
+    providers_sub = providers_parser.add_subparsers(dest="providers_action")
+    providers_sub.add_parser("list", help="List available providers")
+    validate_parser = providers_sub.add_parser("validate", help="Test a provider")
+    validate_parser.add_argument("--provider", required=True,
+                                 help="Provider to test")
+    validate_parser.add_argument("--model", "-m", required=True,
+                                 help="Model to test with")
+
+    # --- update ---
+    subparsers.add_parser("update", help="Self-update to latest version")
+
+    # --- register-acpx ---
+    subparsers.add_parser("register-acpx", help="Register aloop with acpx for ACP integration")
+
+    # --- init ---
+    subparsers.add_parser("init", help="Scaffold .aloop/ directory")
+
+    # --- version ---
+    subparsers.add_parser("version", help="Print version and exit")
+
+    # --- system-prompt ---
+    sp_parser = subparsers.add_parser("system-prompt", help="Show system prompt template")
+    sp_parser.add_argument("--rendered", action="store_true",
+                           help="Show fully interpolated prompt")
+
+    return parser.parse_args(args_list)
 
 
 # ---------------------------------------------------------------------------
@@ -146,18 +235,40 @@ class StreamPrinter:
         self._end_text()
         sys.stderr.write(f"{_RED}{_BOLD}error:{_RESET} {message}\n")
 
-    def on_complete(self, data: dict):
+    def on_compaction(self, data: dict):
         self._end_text()
-        usage = data.get("usage") or {}
-        model = usage.get("model", "?")
-        inp = usage.get("input_tokens", 0)
-        out = usage.get("output_tokens", 0)
-        cost = usage.get("cost_usd", 0)
+        msgs_before = data.get("messages_before", 0)
+        msgs_after = data.get("messages_after", 0)
+        tokens_saved = data.get("tokens_saved", 0)
+        sys.stdout.write(
+            f"{_DIM}── compacted: {msgs_before}→{msgs_after} messages, "
+            f"{tokens_saved:,} tokens saved ──{_RESET}\n"
+        )
+        sys.stdout.flush()
+
+    def on_tool_delta(self, data: dict):
+        content = data.get("content", "")
+        if content:
+            sys.stdout.write(f"  {_DIM}│{_RESET}  {content}")
+            sys.stdout.flush()
+
+    def on_loop_end(self, data: dict):
+        self._end_text()
+        model = data.get("model", "?")
+        inp = data.get("input_tokens", 0)
+        out = data.get("output_tokens", 0)
+        cost = data.get("cost_usd", 0) or 0
+        turns = data.get("turns", 0)
         sys.stdout.write(
             f"\n{_DIM}── {model}  │  "
             f"in: {inp:,}  out: {out:,}  │  "
-            f"${cost:.4f} ──{_RESET}\n"
+            f"${cost:.4f}  │  "
+            f"turns: {turns} ──{_RESET}\n"
         )
+
+    def on_complete(self, data: dict):
+        """Deprecated — kept for backward compat."""
+        self.on_loop_end(data)
 
     def flush(self):
         self._end_text()
@@ -187,14 +298,27 @@ class JsonStreamPrinter:
     def on_tool_end(self, name: str, result: str, is_error: bool):
         self._emit({"type": "tool_end", "name": name, "result": result, "is_error": is_error})
 
+    def on_tool_delta(self, data: dict):
+        self._emit({"type": "tool_delta", **data})
+
     def on_turn(self, iteration: int):
         self._emit({"type": "turn", "iteration": iteration})
+
+    def on_turn_end(self, data: dict):
+        self._emit({"type": "turn_end", **data})
+
+    def on_compaction(self, data: dict):
+        self._emit({"type": "compaction", **data})
 
     def on_error(self, message: str):
         self._emit({"type": "error", "message": message})
 
+    def on_loop_end(self, data: dict):
+        self._emit({"type": "loop_end", **data})
+
     def on_complete(self, data: dict):
-        self._emit({"type": "complete", **data})
+        """Deprecated — kept for backward compat."""
+        self.on_loop_end(data)
 
     def flush(self):
         pass
@@ -220,15 +344,28 @@ class SilentPrinter:
     def on_tool_end(self, name: str, result: str, is_error: bool):
         pass
 
+    def on_tool_delta(self, data: dict):
+        pass
+
     def on_turn(self, iteration: int):
+        pass
+
+    def on_turn_end(self, data: dict):
+        pass
+
+    def on_compaction(self, data: dict):
         pass
 
     def on_error(self, message: str):
         self._accumulated = ""
         self._complete_data = {"error": message}
 
-    def on_complete(self, data: dict):
+    def on_loop_end(self, data: dict):
         self._complete_data = data
+
+    def on_complete(self, data: dict):
+        """Deprecated — kept for backward compat."""
+        self.on_loop_end(data)
 
     def flush(self):
         pass
@@ -239,9 +376,20 @@ class SilentPrinter:
             "session_id": session_id,
         }
         if self._complete_data:
+            # Support both old format (nested "usage" dict) and new format (flat fields)
             usage = self._complete_data.get("usage")
             if usage:
                 result["usage"] = usage
+            else:
+                # Build usage from flat fields
+                inp = self._complete_data.get("input_tokens")
+                out = self._complete_data.get("output_tokens")
+                if inp is not None or out is not None:
+                    result["usage"] = {
+                        "input_tokens": inp or 0,
+                        "output_tokens": out or 0,
+                        "model": self._complete_data.get("model"),
+                    }
             cost = self._complete_data.get("cost_usd")
             if cost is not None:
                 result["cost_usd"] = cost
@@ -274,14 +422,28 @@ async def run_once(backend, prompt, printer, **kwargs) -> dict | None:
                         event.data.get("result", ""),
                         event.data.get("is_error", False),
                     )
+                case EventType.TOOL_DELTA:
+                    if hasattr(printer, "on_tool_delta"):
+                        printer.on_tool_delta(event.data)
                 case EventType.TURN_START:
                     printer.on_turn(event.data.get("iteration", 0))
+                case EventType.TURN_END:
+                    if hasattr(printer, "on_turn_end"):
+                        printer.on_turn_end(event.data)
+                case EventType.COMPACTION:
+                    if hasattr(printer, "on_compaction"):
+                        printer.on_compaction(event.data)
                 case EventType.ERROR:
                     printer.on_error(event.data.get("message", "Unknown error"))
                     return None
-                case EventType.COMPLETE:
-                    printer.on_complete(event.data)
+                case EventType.LOOP_END:
+                    if hasattr(printer, "on_loop_end"):
+                        printer.on_loop_end(event.data)
+                    else:
+                        printer.on_complete(event.data)
                     return event.data
+                case EventType.LOOP_START:
+                    pass  # no visible output
     except KeyboardInterrupt:
         printer.flush()
         sys.stderr.write(f"\n{_DIM}interrupted{_RESET}\n")
@@ -399,11 +561,12 @@ def _resolve_api_key(provider) -> str:
     if not api_key:
         api_key = os.environ.get("ALOOP_API_KEY", "")
 
-    # 3. Credentials file
+    # 3. Credentials file (supports JSONC comments)
     if not api_key:
         cred_file = Path.home() / ".aloop" / "credentials.json"
         if cred_file.exists():
-            creds = json.loads(cred_file.read_text())
+            from .utils import load_jsonc
+            creds = load_jsonc(cred_file)
             api_key = creds.get(provider.env_key, creds.get("api_key", ""))
 
     # 4. No key needed (e.g. Ollama)
@@ -432,7 +595,8 @@ def _resolve_api_key(provider) -> str:
         creds = {}
         if cred_file.exists():
             try:
-                creds = json.loads(cred_file.read_text())
+                from .utils import load_jsonc
+                creds = load_jsonc(cred_file)
             except (OSError, json.JSONDecodeError):
                 pass
         creds[provider.env_key] = api_key
@@ -463,13 +627,14 @@ def _run_register() -> int:
     config: dict = {}
     if _ACPX_CONFIG.exists():
         try:
-            config = json.loads(_ACPX_CONFIG.read_text())
+            from .utils import load_jsonc
+            config = load_jsonc(_ACPX_CONFIG)
         except (OSError, json.JSONDecodeError):
             pass
 
     agents = config.get("agents", {})
 
-    expected = {"command": "aloop --acp"}
+    expected = {"command": "aloop serve"}
 
     # Check if already registered correctly
     if agents.get("aloop") == expected:
@@ -500,17 +665,7 @@ async def _run_validate_provider(args) -> int:
     from .providers import get_provider, get_providers
 
     provider_name = args.provider
-    if not provider_name:
-        sys.stderr.write("error: --provider is required for validate-provider\n")
-        sys.stderr.write(f"  Example: aloop validate-provider --provider openai --model gpt-4o-mini\n")
-        return 1
-
     model = args.model
-    if not model:
-        model = os.environ.get("ALOOP_MODEL")
-    if not model:
-        sys.stderr.write("error: --model is required for validate-provider\n")
-        return 1
 
     try:
         provider = get_provider(provider_name)
@@ -530,7 +685,7 @@ async def _run_validate_provider(args) -> int:
 
     print(f"Validating {_BOLD}{provider.name}{_RESET} with model {_BOLD}{model}{_RESET}\n")
 
-    backend = AgentLoopBackend(model=model, api_key=api_key, provider=provider)
+    backend = ALoop(model=model, api_key=api_key, provider=provider)
     tests_passed = 0
     tests_failed = 0
 
@@ -564,7 +719,7 @@ async def _run_validate_provider(args) -> int:
                     got_text = True
                 elif event.type == EventType.TOOL_START:
                     got_tool = True
-                elif event.type == EventType.COMPLETE:
+                elif event.type == EventType.LOOP_END:
                     got_complete = True
                 elif event.type == EventType.ERROR:
                     error_msg = event.data.get("message", "")
@@ -604,54 +759,381 @@ async def _run_validate_provider(args) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Config show
+# ---------------------------------------------------------------------------
+
+def _run_config_show() -> int:
+    """Show resolved configuration."""
+    from . import get_project_root
+    from .system_prompt import (
+        _load_aloop_config, _load_template, _find_instruction_file,
+        _find_skills_dirs, _load_json_file, OVERRIDABLE_SECTIONS,
+        INSTRUCTION_CANDIDATES,
+    )
+    from .hooks import get_discovered_hooks
+    from .tools.skills import get_skills_by_source
+    from .providers import get_default_provider_name
+
+    root = get_project_root()
+    config = _load_aloop_config(root)
+
+    print(f"{_BOLD}aloop configuration{_RESET}\n")
+
+    # Project root
+    print(f"  {_DIM}project root:{_RESET}    {root}")
+
+    # Config files (global + project)
+    global_config_path = Path.home() / ".aloop" / "config.json"
+    project_config_path = root / ".aloop" / "config.json"
+    if global_config_path.exists():
+        print(f"  {_DIM}global config:{_RESET}   {global_config_path}")
+    else:
+        print(f"  {_DIM}global config:{_RESET}   {_DIM}(none){_RESET}")
+    if project_config_path.exists():
+        print(f"  {_DIM}project config:{_RESET}  {project_config_path}")
+    else:
+        print(f"  {_DIM}project config:{_RESET}  {_DIM}(none){_RESET}")
+
+    # Instruction file (unified discovery chain)
+    found_instruction, skipped = _find_instruction_file(root)
+
+    if found_instruction:
+        # Build explanation string
+        found_name = str(found_instruction.relative_to(root))
+        not_found = [
+            c for c in INSTRUCTION_CANDIDATES
+            if not (root / c).exists()
+        ]
+        info_parts = []
+        if not_found:
+            # Only show candidates that were checked before the found one
+            checked_before = []
+            for c in INSTRUCTION_CANDIDATES:
+                if (root / c) == found_instruction:
+                    break
+                if c in not_found:
+                    checked_before.append(c)
+            if checked_before:
+                info_parts.append(f"{', '.join(checked_before)} not found")
+        if skipped:
+            skip_names = [str(s.relative_to(root)) for s in skipped]
+            info_parts.append(f"{', '.join(skip_names)} also exist but lower priority")
+
+        print(f"  {_DIM}instructions:{_RESET}    {found_instruction}")
+        if info_parts:
+            print(f"                     {_DIM}({'; '.join(info_parts)}){_RESET}")
+    else:
+        print(f"  {_DIM}instructions:{_RESET}    {_DIM}(none){_RESET}")
+
+    # System prompt mode
+    template = _load_template(root, config)
+    if template:
+        sp_key = config.get("system_prompt", "")
+        if isinstance(sp_key, str) and sp_key.startswith("file:"):
+            print(f"  {_DIM}prompt mode:{_RESET}     template ({sp_key})")
+        else:
+            print(f"  {_DIM}prompt mode:{_RESET}     template (inline)")
+    else:
+        print(f"  {_DIM}prompt mode:{_RESET}     section (default)")
+
+    # Section overrides
+    overrides = config.get("sections", {})
+    if isinstance(overrides, dict) and overrides:
+        print(f"\n  {_DIM}section overrides:{_RESET}")
+        for name in OVERRIDABLE_SECTIONS:
+            val = overrides.get(name)
+            if val is False:
+                print(f"    {name}: {_RED}omitted{_RESET}")
+            elif isinstance(val, str):
+                preview = val[:60].replace("\n", " ")
+                print(f"    {name}: {_GREEN}custom{_RESET} ({preview}...)")
+
+    # Skills (merged across directories)
+    skills_by_source = get_skills_by_source()
+    disabled_skills = config.get("disabled_skills", [])
+    if skills_by_source:
+        print(f"\n  {_DIM}skills:{_RESET}")
+        for source, names in skills_by_source.items():
+            # Determine if global or project
+            if str(Path.home()) in source and ".aloop" in source:
+                scope = "global"
+            else:
+                scope = "project"
+            print(f"    {_DIM}[{scope}]{_RESET} {source}")
+            print(f"      {', '.join(sorted(names))}")
+    else:
+        print(f"\n  {_DIM}skills:{_RESET}          {_DIM}(none){_RESET}")
+
+    if disabled_skills:
+        print(f"  {_DIM}disabled skills:{_RESET} {', '.join(disabled_skills)}")
+
+    # Hooks (global + project)
+    hooks_info = get_discovered_hooks(root)
+    disabled_hooks = config.get("disabled_hooks", [])
+    has_hooks = hooks_info["global"] or hooks_info["project"]
+    if has_hooks:
+        print(f"\n  {_DIM}hooks:{_RESET}")
+        if hooks_info["global"]:
+            global_dir = Path.home() / ".aloop" / "hooks"
+            print(f"    {_DIM}[global]{_RESET} {global_dir}")
+            print(f"      {', '.join(hooks_info['global'])}")
+        if hooks_info["project"]:
+            project_dir = root / ".aloop" / "hooks"
+            print(f"    {_DIM}[project]{_RESET} {project_dir}")
+            print(f"      {', '.join(hooks_info['project'])}")
+    else:
+        print(f"\n  {_DIM}hooks:{_RESET}           {_DIM}(none){_RESET}")
+
+    if disabled_hooks:
+        print(f"  {_DIM}disabled hooks:{_RESET}  {', '.join(disabled_hooks)}")
+
+    # Merged config summary
+    if config:
+        print(f"\n  {_DIM}merged config:{_RESET}")
+        # Show key config values (excluding verbose sections)
+        for key in sorted(config.keys()):
+            if key in ("sections",):
+                continue  # already shown above
+            val = config[key]
+            if isinstance(val, str) and len(val) > 80:
+                val = val[:77] + "..."
+            print(f"    {key}: {val}")
+
+    # Provider / model
+    provider_name = config.get("default_provider") or config.get("provider") or get_default_provider_name()
+    model = config.get("default_model") or os.environ.get("ALOOP_MODEL", "(not set)")
+    print(f"\n  {_DIM}provider:{_RESET}        {provider_name}")
+    print(f"  {_DIM}model:{_RESET}           {model}")
+
+    return 0
+
+
+def _run_config_validate() -> int:
+    """Validate config files (JSONC parsing)."""
+    import json as _json
+    from .utils import strip_json_comments
+    from . import get_project_root
+
+    root = get_project_root()
+    files_to_check = [
+        ("global config", Path.home() / ".aloop" / "config.json"),
+        ("project config", root / ".aloop" / "config.json"),
+        ("global compaction", Path.home() / ".aloop" / "compaction.json"),
+        ("models", Path.home() / ".aloop" / "models.json"),
+        ("providers", Path.home() / ".aloop" / "providers.json"),
+        ("credentials", Path.home() / ".aloop" / "credentials.json"),
+    ]
+
+    errors = 0
+    for label, path in files_to_check:
+        if not path.exists():
+            print(f"  {_DIM}{label}: {path} (not found){_RESET}")
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+            stripped = strip_json_comments(text)
+            _json.loads(stripped)
+            print(f"  {_GREEN}{label}: {path} OK{_RESET}")
+        except _json.JSONDecodeError as e:
+            print(f"  {_RED}{label}: {path} INVALID{_RESET}")
+            print(f"    {e}")
+            errors += 1
+        except OSError as e:
+            print(f"  {_RED}{label}: {path} ERROR{_RESET}")
+            print(f"    {e}")
+            errors += 1
+
+    if errors:
+        print(f"\n{_RED}{errors} config file(s) have errors.{_RESET}")
+        return 1
+    else:
+        print(f"\n{_GREEN}All config files valid.{_RESET}")
+        return 0
+
+
+# ---------------------------------------------------------------------------
+# Init scaffold
+# ---------------------------------------------------------------------------
+
+_INIT_CONFIG_TEMPLATE = """\
+{
+  // System prompt: use "file:ALOOP-PROMPT.md" for template mode
+  // "system_prompt": "file:ALOOP-PROMPT.md",
+
+  // Section overrides (only used when system_prompt is not set)
+  // "sections": {
+  //   "preamble": false,
+  //   "identity": "You are a helpful coding agent."
+  // },
+
+  // Modes for different workflows
+  // "modes": {
+  //   "review": {
+  //     "system_prompt": "You are a code reviewer.",
+  //     "tools": ["read_file", "bash"]
+  //   }
+  // },
+
+  // Provider default (openrouter, openai, anthropic, google, groq, etc.)
+  // "provider": "openrouter"
+}
+"""
+
+_INIT_HOOKS_TEMPLATE = """\
+\"\"\"aloop hooks — extend the agent loop without modifying aloop source.
+
+Register hooks by decorating functions with @hook(\"hook_name\").
+
+Available hooks:
+  register_tools    — return a list of ToolDef to add custom tools
+  before_tool       — called before each tool execution (can block/modify)
+  after_tool        — called after each tool execution (can transform results)
+  gather_context    — inject dynamic context into the system prompt
+
+See: https://github.com/zackham/aloop/blob/main/docs/HOOKS.md
+\"\"\"
+
+from aloop_hooks import hook
+# from aloop import ToolDef, ToolResult
+
+# Example: register a custom tool
+# @hook("register_tools")
+# def my_tools():
+#     async def _hello(name: str) -> ToolResult:
+#         return ToolResult(content=f"Hello, {name}!")
+#     return [ToolDef(
+#         name="hello",
+#         description="Say hello",
+#         parameters={"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+#         execute=_hello,
+#     )]
+"""
+
+
+def _run_init() -> int:
+    """Scaffold .aloop/ directory in the current working directory."""
+    root = Path.cwd()
+    aloop_dir = root / ".aloop"
+
+    if aloop_dir.exists():
+        print(f"{_YELLOW}.aloop/ already exists in {root}{_RESET}")
+        # Still create missing subdirectories
+        created = []
+    else:
+        aloop_dir.mkdir(parents=True)
+        created = [".aloop/"]
+
+    # config.json
+    config_path = aloop_dir / "config.json"
+    if not config_path.exists():
+        config_path.write_text(_INIT_CONFIG_TEMPLATE)
+        created.append(".aloop/config.json")
+
+    # hooks/
+    hooks_dir = aloop_dir / "hooks"
+    if not hooks_dir.exists():
+        hooks_dir.mkdir()
+        created.append(".aloop/hooks/")
+
+    # hooks/__init__.py
+    hooks_init = hooks_dir / "__init__.py"
+    if not hooks_init.exists():
+        hooks_init.write_text(_INIT_HOOKS_TEMPLATE)
+        created.append(".aloop/hooks/__init__.py")
+
+    # skills/
+    skills_dir = aloop_dir / "skills"
+    if not skills_dir.exists():
+        skills_dir.mkdir()
+        created.append(".aloop/skills/")
+
+    if created:
+        print(f"{_GREEN}Scaffolded .aloop/ in {root}{_RESET}")
+        for f in created:
+            print(f"  {_DIM}+ {f}{_RESET}")
+    else:
+        print(f"All files already exist in {aloop_dir}")
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 async def main():
     args = parse_args()
 
+    # --version on the root parser
     if args.version:
         from . import __version__
         print(__version__)
         return
 
-    if args.prompt == "update":
-        sys.exit(_run_update())
+    subcmd = args.subcommand
 
-    if args.prompt == "register-acpx":
-        sys.exit(_run_register())
-
-    if args.prompt == "list-providers":
-        from .providers import get_providers
-        providers = get_providers()
-        for key, p in sorted(providers.items()):
-            status = f"{_GREEN}tested{_RESET}" if p.status == "tested" else f"{_DIM}community{_RESET}"
-            print(f"  {key:20s}  {p.name:30s}  [{status}]")
-            if p.notes:
-                print(f"  {' ':20s}  {_DIM}{p.notes}{_RESET}")
+    # --- version ---
+    if subcmd == "version":
+        from . import __version__
+        print(__version__)
         return
 
-    if args.prompt == "validate-provider":
-        sys.exit(await _run_validate_provider(args))
+    # --- update ---
+    if subcmd == "update":
+        sys.exit(_run_update())
 
-    if args.acp:
+    # --- register-acpx ---
+    if subcmd == "register-acpx":
+        sys.exit(_run_register())
+
+    # --- init ---
+    if subcmd == "init":
+        sys.exit(_run_init())
+
+    # --- providers ---
+    if subcmd == "providers":
+        action = getattr(args, "providers_action", None)
+        if action == "list":
+            from .providers import get_providers
+            providers = get_providers()
+            for key, p in sorted(providers.items()):
+                status = f"{_GREEN}tested{_RESET}" if p.status == "tested" else f"{_DIM}community{_RESET}"
+                print(f"  {key:20s}  {p.name:30s}  [{status}]")
+                if p.notes:
+                    print(f"  {' ':20s}  {_DIM}{p.notes}{_RESET}")
+            return
+        elif action == "validate":
+            sys.exit(await _run_validate_provider(args))
+        else:
+            sys.stderr.write("usage: aloop providers {list,validate}\n")
+            sys.exit(1)
+
+    # --- config ---
+    if subcmd == "config":
+        action = getattr(args, "config_action", None)
+        if action == "show":
+            sys.exit(_run_config_show())
+        elif action == "validate":
+            sys.exit(_run_config_validate())
+        else:
+            sys.stderr.write("usage: aloop config {show,validate}\n")
+            sys.exit(1)
+
+    # --- serve ---
+    if subcmd == "serve":
         from .acp import serve_acp
         await serve_acp(model=args.model)
         return
 
-    if args.list_models:
-        for key, cfg in sorted(get_models().items()):
-            print(f"  {key:25s}  {cfg.name}  (ctx: {cfg.context_window:,})")
-        return
-
-    if args.prompt == "system-prompt":
+    # --- system-prompt ---
+    if subcmd == "system-prompt":
         from .system_prompt import _load_aloop_config, _load_template
         from . import get_project_root
         root = get_project_root()
         config = _load_aloop_config(root)
         template = _load_template(root, config)
         if template:
-            if "--rendered" in sys.argv:
+            if args.rendered:
                 print(build_system_prompt())
             else:
                 print(template)
@@ -660,6 +1142,19 @@ async def main():
         print(f"\n{_DIM}---{_RESET}")
         print(f"{_DIM}Available variables: {{{{tools}}}}, {{{{skills}}}}, {{{{agents_md}}}}{_RESET}")
         return
+
+    # --- run (default) ---
+    if subcmd == "run":
+        await _run_prompt(args)
+        return
+
+    # Fallback — shouldn't happen with proper subparser setup
+    sys.stderr.write("error: no subcommand specified. Run 'aloop --help' for usage.\n")
+    sys.exit(1)
+
+
+async def _run_prompt(args):
+    """Handle the 'run' subcommand — the main prompt execution path."""
 
     # --- Resolve session ID ---
     if args.continue_last:
@@ -704,7 +1199,7 @@ async def main():
 
     # --- Build backend ---
     try:
-        backend = AgentLoopBackend(
+        backend = ALoop(
             model=model,
             api_key=api_key,
             provider=provider,
@@ -715,7 +1210,11 @@ async def main():
         sys.exit(1)
 
     # --- Build stream kwargs ---
-    stream_kw: dict = {"session_key": session_id}
+    stream_kw: dict = {"session_id": session_id}
+
+    # --- Mode ---
+    if args.mode:
+        stream_kw["mode"] = args.mode
 
     from .tools import ANALYSIS_TOOLS
     from .tools.skills import load_skill_tool
@@ -732,7 +1231,21 @@ async def main():
         tools = filtered
 
     stream_kw["tools"] = tools
-    stream_kw["system_prompt"] = build_system_prompt(tools=tools)
+
+    # --- Resolve system prompt ---
+    # When a mode is specified without explicit --system-prompt/--system-prompt-file,
+    # let the mode's system prompt take effect (stream() handles this).
+    if args.system_prompt_override:
+        stream_kw["system_prompt"] = args.system_prompt_override
+    elif args.system_prompt_file:
+        sp_path = Path(args.system_prompt_file)
+        if not sp_path.exists():
+            sys.stderr.write(f"error: system prompt file not found: {sp_path}\n")
+            sys.exit(1)
+        stream_kw["system_prompt"] = sp_path.read_text(encoding="utf-8")
+    elif not args.mode:
+        # No mode — use the default built system prompt
+        stream_kw["system_prompt"] = build_system_prompt(tools=tools)
 
     if args.no_context:
         stream_kw["inject_context"] = False

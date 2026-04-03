@@ -2,7 +2,25 @@
 
 aloop's CLI is a thin wrapper around the Python API. Use it for interactive work, scripting, and automation.
 
-## Modes
+## Subcommands
+
+```
+aloop run [PROMPT]              Run a prompt (default when bare prompt given)
+aloop serve                     Run as ACP server over stdio
+aloop config show               Show resolved configuration
+aloop config validate           Validate config files (JSONC parsing)
+aloop providers list            List available API providers
+aloop providers validate        Test a provider's API compatibility
+aloop update                    Self-update to latest version
+aloop register-acpx             Register aloop with acpx for ACP integration
+aloop init                      Scaffold .aloop/ directory
+aloop version                   Print version and exit
+aloop system-prompt             Show system prompt template
+```
+
+The `run` subcommand is the default — bare prompts are treated as `aloop run "prompt"`.
+
+## Running prompts
 
 ### Interactive (default)
 
@@ -91,7 +109,8 @@ aloop -p -o stream-json "List all files"
 {"type": "tool_start", "name": "bash", "args": {"command": "ls"}}
 {"type": "tool_end", "name": "bash", "result": "README.md\nsrc/\ntests/", "is_error": false}
 {"type": "text", "text": "\n\nThe project contains..."}
-{"type": "complete", "text": "...", "session_id": "abc123", "usage": {...}}
+{"type": "turn_end", "iteration": 0, "turn_id": "abc123", "input_tokens": 150, "output_tokens": 80, "cost_usd": 0.001}
+{"type": "loop_end", "text": "...", "session_id": "abc123", "input_tokens": 150, "output_tokens": 80, "cost_usd": 0.001, "model": "x-ai/grok-4.1-fast", "turns": 1}
 ```
 
 Good for: real-time streaming to a UI, log aggregation, building custom frontends.
@@ -116,43 +135,88 @@ aloop "prompt"
 ### Provider management
 
 ```bash
-aloop list-providers                                        # show all providers
-aloop validate-provider --provider openai --model gpt-4o    # test a provider
+aloop providers list                                          # show all providers
+aloop providers validate --provider openai --model gpt-4o     # test a provider
 ```
 
-## Commands
+## System prompt
 
-These are positional subcommands (pass as the prompt argument):
+```bash
+aloop system-prompt                # show the raw system prompt template
+aloop system-prompt --rendered     # show the fully interpolated prompt
 
-| Command | Description |
-|---------|-------------|
-| `aloop update` | Self-update to latest version from GitHub |
-| `aloop register-acpx` | Register aloop with acpx for ACP integration |
-| `aloop list-providers` | Show available API providers with test status |
-| `aloop validate-provider` | Test a provider's streaming, tool calling, and multi-turn |
-| `aloop system-prompt` | Show the raw system prompt template |
-| `aloop system-prompt --rendered` | Show the fully interpolated prompt the model receives |
+# Override system prompt for a single run
+aloop --system-prompt "You are a pirate." "Tell me about ships"
+aloop --system-prompt-file /path/to/prompt.md "Hello"
+```
 
-## All flags
+## Configuration
+
+```bash
+aloop config show     # show resolved config: instructions, hooks, skills, provider, model
+aloop init            # scaffold .aloop/ directory with config, hooks, and skills dirs
+```
+
+`aloop config show` displays the resolved state: which instruction file was found (and which were skipped), loaded hooks, loaded skills, active provider, model, and config file paths. Useful for debugging project setup.
+
+`aloop init` creates a `.aloop/` directory in the current working directory with:
+- `config.json` — JSONC config with commented-out examples explaining options (comments are stripped at parse time)
+- `hooks/__init__.py` — hook decorator and example
+- `skills/` — empty directory for project skills
+
+`aloop config validate` checks all config files for JSONC syntax errors (global, project, compaction, models, providers, credentials).
+
+## ACP server
+
+```bash
+aloop serve                                    # start ACP server on stdio
+aloop serve --model gpt-4o --provider openai   # with specific model/provider
+aloop register-acpx                            # register with acpx
+```
+
+## `aloop run` flags
 
 ```
-aloop [PROMPT] [OPTIONS]
+aloop run [PROMPT] [OPTIONS]
+
+Positional:
+  PROMPT                         Prompt text (optional for interactive mode)
 
 Options:
-  --model, -m MODEL          Model ID (or set ALOOP_MODEL env var)
-  --provider PROVIDER        API provider name (default: openrouter)
-  -p                         One-shot mode: print response and exit
-  -c, --continue             Continue the most recent session
-  --resume SESSION_ID        Resume a specific session by ID
-  -s, --session KEY          Use a named session instead of auto-generated ID
-  -o, --output-format FMT    text (default), json, or stream-json
-  --tools NAMES              Comma-separated tool names (filters built-in tools)
-  --no-context               Skip gather_context hook injection
-  --max-iterations N         Max agent loop iterations (default: 50)
-  --acp                      Run as ACP server over stdio
-  --version                  Print version and exit
-  --list-models              List registered model aliases from ~/.aloop/models.json
+  --model, -m MODEL              Model ID (or set ALOOP_MODEL env var)
+  --provider PROVIDER            API provider name (default: openrouter)
+  -p                             One-shot mode: print response and exit
+  -c, --continue                 Continue the most recent session
+  --resume SESSION_ID            Resume a specific session by ID
+  -s, --session KEY              Use a named session instead of auto-generated ID
+  -o, --output-format FMT        text (default), json, or stream-json
+  --system-prompt TEXT           Override system prompt text
+  --system-prompt-file PATH      Override system prompt from a file
+  --mode MODE                    Named mode from .aloop/config.json modes section
+  --tools NAMES                  Comma-separated tool names (filters built-in tools)
+  --no-context                   Skip gather_context hook injection
+  --max-iterations N             Max agent loop iterations (default: 50)
 ```
+
+## Modes
+
+Named mode configs switch model, tools, system prompt, and compaction per session. Define modes in `.aloop/config.json` (see [CONFIG.md](CONFIG.md#modes)).
+
+```bash
+# Use a review mode (read-only tools, reviewer system prompt)
+aloop --mode review "Check this PR for bugs"
+
+# Use a fast mode (different model, fewer iterations)
+aloop --mode fast "Quick question about the API"
+
+# Mode + explicit overrides (explicit flags win over mode config)
+aloop --mode review --system-prompt "Be extra strict." "Review auth.py"
+```
+
+When `--mode` is set:
+- The mode's `system_prompt` or `system_prompt_file` is used unless `--system-prompt` or `--system-prompt-file` is also specified.
+- The mode's `tools` list filters available tools. The `--tools` flag overrides mode tools entirely.
+- The mode's `model` and `provider` are used for the session.
 
 ## Examples
 
@@ -179,4 +243,10 @@ aloop -c "What was the next step?"
 
 # Headless automation
 ALOOP_MODEL=x-ai/grok-4.1-fast aloop -p -o json "Generate a migration script" > migration.json
+
+# Debug project configuration
+aloop config show
+
+# Scaffold a new project
+cd my-project && aloop init
 ```

@@ -7,9 +7,9 @@ A provider-agnostic, embeddable agent loop. Use any LLM from any provider, exten
 ---
 
 ```python
-from aloop import AgentLoopBackend, EventType
+from aloop import ALoop, EventType
 
-backend = AgentLoopBackend(model="x-ai/grok-4.1-fast", api_key="sk-or-...")
+backend = ALoop(model="x-ai/grok-4.1-fast", api_key="sk-or-...")
 
 async for event in backend.stream("Read README.md and summarize it"):
     if event.type == EventType.TEXT_DELTA:
@@ -55,7 +55,7 @@ aloop --provider ollama --model llama3 "summarize this"
 
 ### Hooks — extend without forking
 
-Four extension points that live in your project's `.aloop/hooks/` directory — not in aloop's source:
+Ten extension points that live in your project's `.aloop/hooks/` directory — not in aloop's source:
 
 ```python
 # .aloop/hooks/tools.py
@@ -77,7 +77,7 @@ def my_tools():
     )]
 ```
 
-Also: `before_tool` (block/modify), `after_tool` (transform results), `gather_context` (inject dynamic context). See [docs/HOOKS.md](docs/HOOKS.md).
+Also: `before_tool` (block/modify/short-circuit), `after_tool` (transform results), `gather_context` (inject dynamic context), `on_loop_start/end`, `on_turn_start/end`, `on_pre/post_compaction`. See [docs/HOOKS.md](docs/HOOKS.md).
 
 ### Sessions with automatic compaction
 
@@ -85,7 +85,7 @@ Long-running conversations don't crash or lose context. The compaction system su
 
 ### ACP server for editor and orchestrator interop
 
-`aloop --acp` exposes the agent as an [Agent Client Protocol](https://agentclientprotocol.com) server. Works with acpx, Zed, JetBrains, Neovim, and Stepwise:
+`aloop serve` exposes the agent as an [Agent Client Protocol](https://agentclientprotocol.com) server. Works with acpx, Zed, JetBrains, Neovim, and Stepwise:
 
 ```bash
 aloop register-acpx              # one-time setup
@@ -148,17 +148,23 @@ aloop -o json -p "prompt"         # JSON output
 aloop -o stream-json -p "prompt"  # NDJSON streaming
 ```
 
-See `aloop --help` for all options, or `aloop list-providers` / `aloop validate-provider` for provider management.
+See `aloop --help` for all options.
 
-### Commands
+### Subcommands
 
 | Command | Description |
 |---------|-------------|
-| `aloop list-providers` | Show available API providers with status |
-| `aloop validate-provider` | Test a provider's API compatibility |
-| `aloop system-prompt` | Inspect the current system prompt |
+| `aloop run [PROMPT]` | Run a prompt (default when bare prompt given) |
+| `aloop serve` | Run as ACP server over stdio |
+| `aloop config show` | Show resolved configuration |
+| `aloop config validate` | Validate config files (JSONC parsing) |
+| `aloop providers list` | List available API providers |
+| `aloop providers validate` | Test a provider's API compatibility |
 | `aloop update` | Self-update to latest version |
 | `aloop register-acpx` | Register with acpx for ACP integration |
+| `aloop init` | Scaffold .aloop/ directory |
+| `aloop version` | Print version |
+| `aloop system-prompt` | Inspect the current system prompt |
 
 ## Project Setup
 
@@ -177,13 +183,15 @@ aloop discovers project configuration from the current working directory. See th
 
 All customization is external — no need to modify aloop source.
 
-- **Add tools**: `register_tools` hook in `.aloop/hooks/`
-- **Add skills**: drop a `SKILL.md` in `.agents/skills/your-skill/`
+- **Add tools**: `@tool` decorator or `register_tools` hook in `.aloop/hooks/`
+- **Add skills**: drop a `SKILL.md` in `.aloop/skills/` or `.agents/skills/your-skill/`
 - **Control tool access**: `before_tool` / `after_tool` hooks
 - **Inject context**: `gather_context` hooks
 - **Add model aliases**: `~/.aloop/models.json`
 - **Add providers**: `~/.aloop/providers.json`
+- **Named modes**: define `"modes"` in `.aloop/config.json` for different workflows
 - **Customize the prompt**: template mode (`ALOOP-PROMPT.md`) or section overrides
+- **JSONC config**: `.aloop/config.json` supports `//` and `#` comments
 
 ## License
 

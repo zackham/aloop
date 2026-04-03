@@ -13,10 +13,13 @@ aloop system-prompt --rendered # fully interpolated, ready-to-send prompt
 
 ### Template mode (recommended for full control)
 
-Write your own system prompt as a markdown file. Reference it in `.aloop/config.json`:
+Write your own system prompt as a markdown file. Reference it in `.aloop/config.json` (supports JSONC comments):
 
-```json
-{"system_prompt": "file:ALOOP-PROMPT.md"}
+```jsonc
+{
+  // Template mode — your file IS the prompt
+  "system_prompt": "file:ALOOP-PROMPT.md"
+}
 ```
 
 Your template IS the prompt. Use variables for auto-generated content:
@@ -24,8 +27,8 @@ Your template IS the prompt. Use variables for auto-generated content:
 | Variable | Replaced With |
 |----------|--------------|
 | `{{tools}}` | Tool listing with descriptions (includes `## Tools` heading) |
-| `{{skills}}` | Skill listing from `.agents/skills/` (includes `## Skills` heading, or empty string if no skills) |
-| `{{agents_md}}` | Body of `ALOOP.md`, `AGENTS.md`, or `CLAUDE.md` (first found, frontmatter stripped, **no heading added** — your file's content is inserted as-is) |
+| `{{skills}}` | Skill listing merged from all skill directories (includes `## Skills` heading, or empty string if no skills) |
+| `{{agents_md}}` | Body of instruction file from unified discovery chain: `ALOOP.md` > `AGENTS.md` > `.agents/AGENTS.md` > `CLAUDE.md` > `.claude/CLAUDE.md` (first found, frontmatter stripped, **no heading added** — your file's content is inserted as-is) |
 
 **Important:** The `{{tools}}` and `{{skills}}` variables include their own `##` headings. Don't wrap them in another heading. `{{agents_md}}` does NOT include a heading — if your AGENTS.md starts with `# My Project`, that heading will appear in the prompt. If it doesn't start with a heading, no heading is added.
 
@@ -142,7 +145,7 @@ project's instructions in the context provided below.
 
 ### With skills
 
-If the project has skills in `.agents/skills/`, a `## Skills` section is inserted after `## Tools`:
+If the project has skills in `.aloop/skills/`, `.agents/skills/`, or `.claude/skills/` (merged from all found directories), a `## Skills` section is inserted after `## Tools`:
 
 ```
 ---

@@ -10,6 +10,7 @@ from aloop.tools.skills import (
     build_skill_listing,
     list_skill_names,
     _load_skill,
+    get_skills_by_source,
 )
 
 
@@ -18,15 +19,17 @@ from aloop.tools.skills import (
 
 def _make_skill(skills_dir: Path, name: str, frontmatter: str = "", body: str = ""):
     d = skills_dir / name
-    d.mkdir()
+    d.mkdir(parents=True, exist_ok=True)
     (d / "SKILL.md").write_text(f"---\n{frontmatter}---\n{body}")
 
 
 @pytest.fixture
 def skills_dir(tmp_path, monkeypatch):
+    """Create a single skills directory and wire it up."""
     sd = tmp_path / "skills"
     sd.mkdir()
-    monkeypatch.setattr("aloop.tools.skills.SKILLS_DIR", sd)
+    monkeypatch.setattr("aloop.tools.skills._find_all_skills_dirs", lambda: [sd])
+    monkeypatch.setattr("aloop.tools.skills._load_disabled_skills", lambda: set())
     monkeypatch.setattr("aloop.tools.skills._skill_cache", None)
     return sd
 
@@ -76,7 +79,7 @@ def test_discover_skills_valid(skills_dir):
     # dir without SKILL.md — should be skipped
     (skills_dir / "empty-dir").mkdir()
 
-    result = _discover_skills()
+    result = _discover_skills(skills_dirs=[skills_dir])
     assert "Alpha Skill" in result  # uses frontmatter name
     assert "beta" in result  # falls back to dir name
     assert "empty-dir" not in result
@@ -84,9 +87,9 @@ def test_discover_skills_valid(skills_dir):
 
 
 def test_discover_skills_missing_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr("aloop.tools.skills.SKILLS_DIR", tmp_path / "nope")
+    monkeypatch.setattr("aloop.tools.skills._find_all_skills_dirs", lambda: [tmp_path / "nope"])
     monkeypatch.setattr("aloop.tools.skills._skill_cache", None)
-    assert _discover_skills() == {}
+    assert _discover_skills(skills_dirs=[tmp_path / "nope"]) == {}
 
 
 def test_discover_skills_read_error(skills_dir, monkeypatch):
@@ -106,7 +109,7 @@ def test_discover_skills_read_error(skills_dir, monkeypatch):
 
     # Add a good skill too
     _make_skill(skills_dir, "good", "name: good\n", "body")
-    result = _discover_skills()
+    result = _discover_skills(skills_dirs=[skills_dir])
     assert "good" in result
     assert "broken" not in result
 
@@ -203,3 +206,75 @@ async def test_load_skill_read_error(skills_dir, monkeypatch):
     result = await _load_skill("broke")
     assert result.is_error is True
     assert "Error reading skill" in result.content
+
+
+# --- Merged skill discovery ---
+
+
+def test_discover_skills_merged_across_dirs(tmp_path, monkeypatch):
+    """Skills from multiple directories are merged."""
+    dir1 = tmp_path / "project_skills"
+    dir2 = tmp_path / "global_skills"
+    dir1.mkdir()
+    dir2.mkdir()
+
+    _make_skill(dir1, "alpha", "name: alpha\ndescription: project alpha\n")
+    _make_skill(dir2, "beta", "name: beta\ndescription: global beta\n")
+
+    monkeypatch.setattr("aloop.tools.skills._skill_cache", None)
+    result = _discover_skills(skills_dirs=[dir1, dir2], disabled_skills=set())
+    assert "alpha" in result
+    assert "beta" in result
+    assert len(result) == 2
+
+
+def test_discover_skills_project_overrides_global(tmp_path, monkeypatch):
+    """When same skill name exists in project and global, project wins."""
+    project = tmp_path / "project_skills"
+    global_d = tmp_path / "global_skills"
+    project.mkdir()
+    global_d.mkdir()
+
+    _make_skill(project, "deploy", "name: deploy\ndescription: project deploy\n")
+    _make_skill(global_d, "deploy", "name: deploy\ndescription: global deploy\n")
+
+    monkeypatch.setattr("aloop.tools.skills._skill_cache", None)
+    # project first in priority order
+    result = _discover_skills(skills_dirs=[project, global_d], disabled_skills=set())
+    assert result["deploy"]["description"] == "project deploy"
+    assert str(project) in result["deploy"]["path"]
+
+
+def test_discover_skills_disabled_skills(tmp_path, monkeypatch):
+    """Disabled skills are excluded from discovery."""
+    sd = tmp_path / "skills"
+    sd.mkdir()
+
+    _make_skill(sd, "alpha", "name: alpha\ndescription: alpha\n")
+    _make_skill(sd, "beta", "name: beta\ndescription: beta\n")
+
+    monkeypatch.setattr("aloop.tools.skills._skill_cache", None)
+    result = _discover_skills(skills_dirs=[sd], disabled_skills={"alpha"})
+    assert "alpha" not in result
+    assert "beta" in result
+
+
+def test_get_skills_by_source(tmp_path, monkeypatch):
+    """get_skills_by_source returns skills grouped by directory."""
+    dir1 = tmp_path / "project_skills"
+    dir2 = tmp_path / "global_skills"
+    dir1.mkdir()
+    dir2.mkdir()
+
+    _make_skill(dir1, "alpha", "name: alpha\ndescription: pa\n")
+    _make_skill(dir2, "beta", "name: beta\ndescription: gb\n")
+
+    monkeypatch.setattr("aloop.tools.skills._find_all_skills_dirs", lambda: [dir1, dir2])
+    monkeypatch.setattr("aloop.tools.skills._load_disabled_skills", lambda: set())
+    monkeypatch.setattr("aloop.tools.skills._skill_cache", None)
+
+    by_source = get_skills_by_source()
+    assert str(dir1) in by_source
+    assert str(dir2) in by_source
+    assert "alpha" in by_source[str(dir1)]
+    assert "beta" in by_source[str(dir2)]

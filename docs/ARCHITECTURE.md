@@ -33,15 +33,18 @@ aloop is an agent loop harness — it sends prompts to language models, executes
 
 ```
 1. Build system prompt
+   ├── Load config: ~/.aloop/config.json deep-merged with .aloop/config.json
+   ├── Find instructions: ALOOP.md > AGENTS.md > .agents/AGENTS.md > CLAUDE.md > .claude/CLAUDE.md
+   ├── Find skills: .aloop/skills/ ∪ .agents/skills/ ∪ .claude/skills/ ∪ ~/.aloop/skills/
    ├── Template mode: read ALOOP-PROMPT.md, interpolate {{variables}}
-   └── Section mode: assemble defaults + overrides + AGENTS.md
+   └── Section mode: assemble defaults + overrides + instructions
 
 2. Assemble messages
    ├── System prompt (position 0, cached by prefix matching)
    ├── Session history (if resuming)
    └── New user prompt
 
-3. Run hooks
+3. Run hooks (global ~/.aloop/hooks/ first, then project .aloop/hooks/)
    ├── gather_context → append to system prompt
    └── register_tools → extend tool set
 
@@ -57,7 +60,7 @@ aloop is an agent loop harness — it sends prompts to language models, executes
    │   ├── execute tool function
    │   ├── run after_tool hooks (transform result)
    │   └── persist large results to disk (>50K chars)
-   └── No tool calls → COMPLETE (exit loop)
+   └── No tool calls → LOOP_END (exit loop)
 
 6. Post-turn
    ├── Check compaction threshold
@@ -82,16 +85,20 @@ Stale session (>4h or >100 messages):
 
 ## Streaming Protocol
 
-All events are `InferenceEvent(type, data)`:
+All events are `InferenceEvent(type, data, timestamp, session_id, turn_id, tool_call_id)`:
 
 | Event | Data | When |
 |-------|------|------|
-| `TURN_START` | `{iteration}` | Each loop iteration begins |
+| `LOOP_START` | `{session_id, model, provider}` | Loop begins (before first turn) |
+| `TURN_START` | `{iteration, turn_id}` | Each loop iteration begins |
 | `TEXT_DELTA` | `{text}` | Model produces text |
+| `THINKING_DELTA` | `{text}` | Model thinking/reasoning |
 | `TOOL_START` | `{name, id, args}` | Model requests a tool call |
+| `TOOL_DELTA` | `{name, id, output}` | Streaming tool output (bash) |
 | `TOOL_END` | `{name, id, result, is_error}` | Tool execution complete |
-| `TURN_END` | `{iteration}` | Loop iteration ends |
-| `COMPLETE` | `{text, session_id, cost_usd, usage}` | Final response |
+| `TURN_END` | `{iteration, turn_id, input_tokens, output_tokens, cost_usd}` | Loop iteration ends |
+| `COMPACTION` | `{messages_before, messages_after, tokens_saved}` | Context compacted |
+| `LOOP_END` | `{text, session_id, input_tokens, output_tokens, cost_usd, model, turns}` | Final response |
 | `ERROR` | `{message}` | Fatal error |
 
 ## Context Compaction
@@ -153,19 +160,21 @@ The system prompt is designed for prefix caching (automatic on OpenRouter/Anthro
 | Module | Responsibility | Dependencies |
 |--------|---------------|-------------|
 | `__init__.py` | Project root discovery, public API | — |
-| `cli.py` | CLI entry point, ANSI terminal output | agent_backend, system_prompt, models, tools |
-| `agent_backend.py` | Core loop: stream, tool execution, compaction | compaction, models, session, hooks, tools, types |
-| `system_prompt.py` | Prompt builder (template + section modes) | — (reads files directly) |
-| `hooks.py` | Hook discovery and execution | — (loads .aloop/hooks/ dynamically) |
-| `compaction.py` | Context summarization, file restoration | models |
+| `cli.py` | CLI entry point, ANSI terminal output, config validation | agent_backend, system_prompt, models, tools, utils |
+| `agent_backend.py` | ALoop class: stream, tool execution, compaction | config, compaction, models, session, hooks, tools, types |
+| `config.py` | LoopConfig dataclass, mode resolution | compaction |
+| `system_prompt.py` | Prompt builder (template + section modes), config loading, instruction/skill discovery | utils |
+| `hooks.py` | Hook discovery and execution (global + project) | system_prompt (for config) |
+| `compaction.py` | Context summarization, file restoration | models, utils |
 | `session.py` | Persistent session management | compaction |
-| `providers.py` | Provider registry (OpenRouter, OpenAI, Ollama, etc.) | — |
-| `models.py` | Model registry with cost tracking | — |
+| `providers.py` | Provider registry (OpenRouter, OpenAI, Ollama, etc.) | utils |
+| `models.py` | Model registry with cost tracking | utils |
+| `utils.py` | JSONC parsing (strip_json_comments, load_jsonc) | — |
 | `types.py` | Event types, result types | — |
 | `tools_base.py` | ToolDef, ToolResult base classes | — |
 | `backend.py` | InferenceBackend protocol | types |
 | `tools/__init__.py` | Tool registration and presets | tools_base, files, shell, skills |
 | `tools/files.py` | read_file, write_file, edit_file | tools_base |
 | `tools/shell.py` | bash tool | tools_base |
-| `tools/skills.py` | load_skill tool, skill discovery | tools_base |
+| `tools/skills.py` | load_skill tool, skill discovery (global + project, merged) | tools_base, system_prompt |
 | `acp.py` | ACP server (Agent Client Protocol) | agent_backend, system_prompt, tools, types |

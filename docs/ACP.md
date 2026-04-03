@@ -8,7 +8,7 @@ aloop has a built-in [Agent Client Protocol](https://agentclientprotocol.com) (A
 aloop register-acpx
 ```
 
-This writes `{"agents": {"aloop": {"command": "aloop --acp"}}}` to `~/.acpx/config.json`. Run once. Idempotent.
+This writes `{"agents": {"aloop": {"command": "aloop serve"}}}` to `~/.acpx/config.json`. Run once. Idempotent.
 
 Requires [acpx](https://github.com/openclaw/acpx) installed: `npm install -g acpx`
 
@@ -98,7 +98,7 @@ Edit `~/.acpx/config.json`:
 ```json
 {
   "agents": {
-    "aloop": {"command": "aloop --acp --model x-ai/grok-4.1-fast"}
+    "aloop": {"command": "aloop serve --model x-ai/grok-4.1-fast"}
   }
 }
 ```
@@ -115,11 +115,11 @@ After `aloop register-acpx`, aloop appears in Zed's agent picker. Select it and 
 
 ### JetBrains / Neovim
 
-Editors with ACP support via plugins work the same way — they spawn `aloop --acp` as a subprocess and communicate over stdio using the ACP JSON-RPC protocol.
+Editors with ACP support via plugins work the same way — they spawn `aloop serve` as a subprocess and communicate over stdio using the ACP JSON-RPC protocol.
 
 ## How it works
 
-`aloop --acp` runs as an ACP server over stdio (JSON-RPC 2.0, NDJSON):
+`aloop serve` runs as an ACP server over stdio (JSON-RPC 2.0, NDJSON):
 
 ```
 Client (acpx/editor)              aloop --acp
@@ -127,14 +127,14 @@ Client (acpx/editor)              aloop --acp
     │── initialize ──────────────────► │
     │◄── protocol_version, caps ────── │
     │                                  │
-    │── session/new (cwd) ───────────► │  creates AgentLoopBackend
+    │── session/new (cwd) ───────────► │  creates ALoop
     │◄── session_id ───────────────── │
     │                                  │
     │── session/prompt ──────────────► │  drives backend.stream()
     │◄── session_update (text) ────── │  ← TEXT_DELTA
     │◄── session_update (tool_call) ─ │  ← TOOL_START
     │◄── session_update (tool_done) ─ │  ← TOOL_END
-    │◄── session_update (usage) ───── │  ← COMPLETE
+    │◄── session_update (usage) ───── │  ← TURN_END
     │◄── prompt_response ──────────── │
     │                                  │
     │── session/cancel ──────────────► │  sets cancel event
@@ -148,8 +148,11 @@ Client (acpx/editor)              aloop --acp
 | `TEXT_DELTA` | `agent_message_chunk` |
 | `THINKING_DELTA` | `agent_thought_chunk` |
 | `TOOL_START` | `tool_call` (status: in_progress) |
+| `TOOL_DELTA` | `tool_call_update` (partial content) |
 | `TOOL_END` | `tool_call_update` (status: completed/failed) |
-| `COMPLETE` | `usage_update` (cost, tokens) |
+| `TURN_END` | `usage_update` (per-turn cost, tokens) |
+| `COMPACTION` | logged (no ACP notification) |
+| `LOOP_END` | end_turn (stop reason) |
 
 ### ACP methods supported
 
@@ -163,11 +166,12 @@ Client (acpx/editor)              aloop --acp
 | `session/close` | Clean up session state |
 | `session/fork` | Branch a session |
 | `session/list` | List known sessions |
+| `set_session_mode` | Switch to a named mode config (model, tools, system prompt, compaction) |
 | `set_session_model` | Change model for a session (used by `acpx --model`) |
 
 ### Per-session state
 
-Each ACP session gets its own `AgentLoopBackend` instance with independent:
+Each ACP session gets its own `ALoop` instance with independent:
 - Token counters and cost tracking
 - Compaction state and circuit breaker
 - Conversation history

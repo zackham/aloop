@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from aloop.cli import (
     StreamPrinter, JsonStreamPrinter, SilentPrinter,
-    parse_args, run_once,
+    parse_args, run_once, SUBCOMMANDS,
 )
 from aloop.types import EventType, InferenceEvent
 
@@ -26,12 +26,13 @@ async def _mock_stream(*events):
         yield e
 
 
-# --- parse_args ---
+# --- parse_args: run subcommand (explicit and implicit) ---
 
 
-def test_parse_args_prompt_only(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["cli", "hello"])
-    args = parse_args()
+def test_parse_args_bare_prompt():
+    """Bare prompt should be treated as 'run' subcommand."""
+    args = parse_args(["hello"])
+    assert args.subcommand == "run"
     assert args.prompt == "hello"
     assert args.model is None
     assert args.session is None
@@ -41,13 +42,19 @@ def test_parse_args_prompt_only(monkeypatch):
     assert args.output_format == "text"
 
 
-def test_parse_args_all_flags(monkeypatch):
-    monkeypatch.setattr("sys.argv", [
-        "cli", "--model", "m2.5",
+def test_parse_args_explicit_run():
+    args = parse_args(["run", "hello"])
+    assert args.subcommand == "run"
+    assert args.prompt == "hello"
+
+
+def test_parse_args_all_flags():
+    args = parse_args([
+        "run", "--model", "m2.5",
         "--session", "s1", "--tools", "bash,read_file",
         "--no-context", "--max-iterations", "10", "-p", "prompt",
     ])
-    args = parse_args()
+    assert args.subcommand == "run"
     assert args.model == "m2.5"
     assert args.session == "s1"
     assert args.tools == "bash,read_file"
@@ -57,57 +64,168 @@ def test_parse_args_all_flags(monkeypatch):
     assert args.prompt == "prompt"
 
 
-def test_parse_args_print_mode(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["cli", "-p", "hello"])
-    args = parse_args()
+def test_parse_args_print_mode():
+    args = parse_args(["-p", "hello"])
+    assert args.subcommand == "run"
     assert args.print_mode is True
     assert args.prompt == "hello"
 
 
-def test_parse_args_continue(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["cli", "-c"])
-    args = parse_args()
+def test_parse_args_continue():
+    args = parse_args(["-c"])
+    assert args.subcommand == "run"
     assert args.continue_last is True
 
 
-def test_parse_args_resume(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["cli", "--resume", "abc123", "continue this"])
-    args = parse_args()
+def test_parse_args_resume():
+    args = parse_args(["--resume", "abc123", "continue this"])
+    assert args.subcommand == "run"
     assert args.resume == "abc123"
     assert args.prompt == "continue this"
 
 
-def test_parse_args_output_format(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["cli", "-o", "stream-json", "-p", "hello"])
-    args = parse_args()
+def test_parse_args_output_format():
+    args = parse_args(["-o", "stream-json", "-p", "hello"])
+    assert args.subcommand == "run"
     assert args.output_format == "stream-json"
 
 
-def test_parse_args_output_format_json(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["cli", "--output-format", "json", "-p", "hello"])
-    args = parse_args()
+def test_parse_args_output_format_json():
+    args = parse_args(["--output-format", "json", "-p", "hello"])
+    assert args.subcommand == "run"
     assert args.output_format == "json"
 
 
-def test_parse_args_short_flags(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["cli", "-m", "x", "-s", "s1", "-p", "p"])
-    args = parse_args()
+def test_parse_args_short_flags():
+    args = parse_args(["-m", "x", "-s", "s1", "-p", "p"])
+    assert args.subcommand == "run"
     assert args.model == "x"
     assert args.session == "s1"
     assert args.print_mode is True
     assert args.prompt == "p"
 
 
-def test_parse_args_list_models(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["cli", "--list-models"])
-    args = parse_args()
-    assert args.list_models is True
-
-
-def test_parse_args_no_prompt(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["cli"])
-    args = parse_args()
+def test_parse_args_no_prompt():
+    """No arguments should default to 'run' with no prompt (interactive REPL)."""
+    args = parse_args([])
+    assert args.subcommand == "run"
     assert args.prompt is None
+
+
+def test_parse_args_system_prompt_override():
+    args = parse_args(["run", "--system-prompt", "You are a cat.", "meow"])
+    assert args.system_prompt_override == "You are a cat."
+    assert args.prompt == "meow"
+
+
+def test_parse_args_system_prompt_file():
+    args = parse_args(["run", "--system-prompt-file", "/tmp/prompt.md", "hello"])
+    assert args.system_prompt_file == "/tmp/prompt.md"
+
+
+def test_parse_args_mode_flag():
+    args = parse_args(["run", "--mode", "fast", "hello"])
+    assert args.mode == "fast"
+
+
+# --- parse_args: other subcommands ---
+
+
+def test_parse_args_version_subcommand():
+    args = parse_args(["version"])
+    assert args.subcommand == "version"
+
+
+def test_parse_args_version_flag():
+    args = parse_args(["--version"])
+    assert args.version is True
+
+
+def test_parse_args_update():
+    args = parse_args(["update"])
+    assert args.subcommand == "update"
+
+
+def test_parse_args_register_acpx():
+    args = parse_args(["register-acpx"])
+    assert args.subcommand == "register-acpx"
+
+
+def test_parse_args_init():
+    args = parse_args(["init"])
+    assert args.subcommand == "init"
+
+
+def test_parse_args_serve():
+    args = parse_args(["serve"])
+    assert args.subcommand == "serve"
+
+
+def test_parse_args_serve_with_model():
+    args = parse_args(["serve", "--model", "gpt-4o", "--provider", "openai"])
+    assert args.subcommand == "serve"
+    assert args.model == "gpt-4o"
+    assert args.provider == "openai"
+
+
+def test_parse_args_providers_list():
+    args = parse_args(["providers", "list"])
+    assert args.subcommand == "providers"
+    assert args.providers_action == "list"
+
+
+def test_parse_args_providers_validate():
+    args = parse_args(["providers", "validate", "--provider", "openai", "--model", "gpt-4o"])
+    assert args.subcommand == "providers"
+    assert args.providers_action == "validate"
+    assert args.provider == "openai"
+    assert args.model == "gpt-4o"
+
+
+def test_parse_args_config_show():
+    args = parse_args(["config", "show"])
+    assert args.subcommand == "config"
+    assert args.config_action == "show"
+
+
+def test_parse_args_system_prompt():
+    args = parse_args(["system-prompt"])
+    assert args.subcommand == "system-prompt"
+    assert args.rendered is False
+
+
+def test_parse_args_system_prompt_rendered():
+    args = parse_args(["system-prompt", "--rendered"])
+    assert args.subcommand == "system-prompt"
+    assert args.rendered is True
+
+
+# --- SUBCOMMANDS set ---
+
+
+def test_subcommands_set():
+    """All expected subcommands should be in the SUBCOMMANDS set."""
+    expected = {"run", "serve", "config", "providers", "update",
+                "register-acpx", "init", "version", "system-prompt"}
+    assert SUBCOMMANDS == expected
+
+
+# --- Implicit run injection ---
+
+
+def test_implicit_run_for_bare_prompt():
+    """A bare word that isn't a subcommand becomes a prompt under 'run'."""
+    args = parse_args(["hello world is great"])
+    assert args.subcommand == "run"
+    assert args.prompt == "hello world is great"
+
+
+def test_implicit_run_for_flags():
+    """Flags without a subcommand should inject 'run'."""
+    args = parse_args(["-p", "test prompt"])
+    assert args.subcommand == "run"
+    assert args.print_mode is True
+    assert args.prompt == "test prompt"
 
 
 # --- StreamPrinter ---
@@ -239,17 +357,16 @@ def test_on_error_to_stderr(monkeypatch):
     assert "\033[31m" in stderr_buf.getvalue()
 
 
-def test_on_complete_with_usage(monkeypatch):
+def test_on_loop_end_with_usage(monkeypatch):
     buf = io.StringIO()
     monkeypatch.setattr("sys.stdout", buf)
     printer = StreamPrinter()
-    printer.on_complete({
-        "usage": {
-            "model": "m2.5",
-            "input_tokens": 100,
-            "output_tokens": 50,
-            "cost_usd": 0.01,
-        }
+    printer.on_loop_end({
+        "model": "m2.5",
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cost_usd": 0.01,
+        "turns": 1,
     })
     out = buf.getvalue()
     assert "m2.5" in out
@@ -257,11 +374,11 @@ def test_on_complete_with_usage(monkeypatch):
     assert "0.0100" in out
 
 
-def test_on_complete_missing_usage(monkeypatch):
+def test_on_loop_end_missing_data(monkeypatch):
     buf = io.StringIO()
     monkeypatch.setattr("sys.stdout", buf)
     printer = StreamPrinter()
-    printer.on_complete({})
+    printer.on_loop_end({})
     assert "?" in buf.getvalue()
 
 
@@ -298,14 +415,14 @@ def test_json_stream_tool_end(monkeypatch):
     assert line["is_error"] is True
 
 
-def test_json_stream_complete(monkeypatch):
+def test_json_stream_loop_end(monkeypatch):
     buf = io.StringIO()
     monkeypatch.setattr("sys.stdout", buf)
     printer = JsonStreamPrinter()
-    printer.on_complete({"usage": {"model": "test"}})
+    printer.on_loop_end({"model": "test", "input_tokens": 100, "output_tokens": 50, "turns": 1})
     line = json.loads(buf.getvalue().strip())
-    assert line["type"] == "complete"
-    assert line["usage"]["model"] == "test"
+    assert line["type"] == "loop_end"
+    assert line["model"] == "test"
 
 
 def test_json_stream_error(monkeypatch):
@@ -343,7 +460,7 @@ def test_silent_print_result(monkeypatch):
     monkeypatch.setattr("sys.stdout", buf)
     printer = SilentPrinter()
     printer.on_text("response text")
-    printer.on_complete({"usage": {"input_tokens": 100}, "cost_usd": 0.01})
+    printer.on_loop_end({"input_tokens": 100, "cost_usd": 0.01})
     printer.print_result("sess-123")
     result = json.loads(buf.getvalue().strip())
     assert result["text"] == "response text"
@@ -367,7 +484,7 @@ async def test_run_once_happy_path():
         _make_event(EventType.TEXT_DELTA, {"text": "hello"}),
         _make_event(EventType.TOOL_START, {"name": "bash", "args": {"cmd": "ls"}}),
         _make_event(EventType.TOOL_END, {"name": "bash", "result": "file.txt", "is_error": False}),
-        _make_event(EventType.COMPLETE, {"usage": {"model": "test"}}),
+        _make_event(EventType.LOOP_END, {"usage": {"model": "test"}}),
     ]
     backend = MagicMock()
     backend.stream = lambda prompt, **kw: _mock_stream(*events)
@@ -378,7 +495,7 @@ async def test_run_once_happy_path():
     printer.on_text.assert_called_with("hello")
     printer.on_tool_start.assert_called_once_with("bash", {"cmd": "ls"})
     printer.on_tool_end.assert_called_once_with("bash", "file.txt", False)
-    printer.on_complete.assert_called_once()
+    printer.on_loop_end.assert_called_once()
     assert result == {"usage": {"model": "test"}}
 
 
@@ -401,7 +518,7 @@ async def test_run_once_error_returns_none():
 async def test_run_once_text_then_complete():
     events = [
         _make_event(EventType.TEXT_DELTA, {"text": "just text"}),
-        _make_event(EventType.COMPLETE, {"text": "done"}),
+        _make_event(EventType.LOOP_END, {"text": "done"}),
     ]
     backend = MagicMock()
     backend.stream = lambda prompt, **kw: _mock_stream(*events)
@@ -410,7 +527,7 @@ async def test_run_once_text_then_complete():
     result = await run_once(backend, "test", printer)
 
     printer.on_text.assert_called_with("just text")
-    printer.on_complete.assert_called_once()
+    printer.on_loop_end.assert_called_once()
     assert result == {"text": "done"}
 
 
@@ -438,7 +555,7 @@ async def test_run_once_keyboard_interrupt(monkeypatch):
 async def test_run_once_turn_start():
     events = [
         _make_event(EventType.TURN_START, {"iteration": 1}),
-        _make_event(EventType.COMPLETE, {"text": "done"}),
+        _make_event(EventType.LOOP_END, {"text": "done"}),
     ]
     backend = MagicMock()
     backend.stream = lambda prompt, **kw: _mock_stream(*events)

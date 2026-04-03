@@ -12,16 +12,19 @@ The convention is used by multiple tools:
 
 ## How aloop Uses It
 
-aloop checks for project instructions in this order:
+aloop uses a unified discovery chain for project instructions. Both section mode and template mode (`{{agents_md}}`) use the same order:
 
-1. `AGENTS.md` (project root)
-2. `.agents/AGENTS.md`
-3. `CLAUDE.md` (project root)
-4. `.claude/CLAUDE.md`
+1. `ALOOP.md` (project root)
+2. `AGENTS.md` (project root)
+3. `.agents/AGENTS.md`
+4. `CLAUDE.md` (project root)
+5. `.claude/CLAUDE.md`
 
-The first file found is loaded into the system prompt under `# Project Context` (in section mode).
+First match wins. The found file is loaded into the system prompt under `# Project Context` (in section mode) or available as `{{agents_md}}` (in template mode).
 
-In template mode, the `{{agents_md}}` variable checks a slightly different order: `ALOOP.md`, `AGENTS.md`, `CLAUDE.md` — this lets projects have a separate operational context file for the aloop harness while keeping `AGENTS.md` as the cross-tool standard.
+`ALOOP.md` is checked first so projects can have a separate aloop-specific instruction file while keeping `AGENTS.md` as the cross-tool standard.
+
+When multiple candidates exist, aloop logs a DEBUG message noting which was used and which were skipped. Run `aloop config show` to see the resolved instruction file.
 
 ## What to Put In It
 

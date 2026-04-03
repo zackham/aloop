@@ -59,9 +59,9 @@ class TestStreamTimeout:
     def test_stream_completion_uses_model_timeout(self):
         """Verify _stream_completion references model config, not hardcoded 300."""
         import inspect
-        from aloop.agent_backend import AgentLoopBackend
+        from aloop.agent_backend import ALoop
 
-        backend = AgentLoopBackend(model="minimax-m2.5", api_key="test")
+        backend = ALoop(model="minimax-m2.5", api_key="test")
         source = inspect.getsource(backend._stream_completion)
         assert "300.0" not in source, "hardcoded 300.0 timeout still present"
         assert "stream_timeout" in source, "stream_timeout not referenced"
@@ -143,7 +143,7 @@ class TestResolveSessionClearing:
     def test_stale_session_cleared_on_resolve(self, tmp_path):
         """_resolve_session clears a stale loaded session."""
         with patch("aloop.session._sessions_dir", return_value=tmp_path):
-            from aloop.agent_backend import AgentLoopBackend
+            from aloop.agent_backend import ALoop
 
             sid = "test_fixed"
             messages = [{"role": "user", "content": f"m{i}"} for i in range(10)]
@@ -151,14 +151,14 @@ class TestResolveSessionClearing:
                 tmp_path, sid, messages, time.time() - 20000,
             )
 
-            backend = AgentLoopBackend(model="minimax-m2.5", api_key="test")
-            resolved = backend._resolve_session(kwargs={"session_key": sid})
+            backend = ALoop(model="minimax-m2.5", api_key="test")
+            resolved = backend._resolve_session(kwargs={"session_id": sid})
             assert resolved.messages == [], "stale session should be cleared"
 
     def test_stale_session_log_event(self, tmp_path):
         """Clearing a stale session logs session_auto_cleared event."""
         with patch("aloop.session._sessions_dir", return_value=tmp_path):
-            from aloop.agent_backend import AgentLoopBackend
+            from aloop.agent_backend import ALoop
 
             sid = "test_fixed"
             messages = [{"role": "user", "content": "hi"}]
@@ -166,8 +166,8 @@ class TestResolveSessionClearing:
                 tmp_path, sid, messages, time.time() - 20000,
             )
 
-            backend = AgentLoopBackend(model="minimax-m2.5", api_key="test")
-            backend._resolve_session(kwargs={"session_key": sid})
+            backend = ALoop(model="minimax-m2.5", api_key="test")
+            backend._resolve_session(kwargs={"session_id": sid})
 
             log_path = tmp_path / f"{sid}.log.jsonl"
             assert log_path.exists()
@@ -181,7 +181,7 @@ class TestResolveSessionClearing:
     def test_fresh_session_not_cleared(self, tmp_path):
         """_resolve_session keeps a fresh session intact."""
         with patch("aloop.session._sessions_dir", return_value=tmp_path):
-            from aloop.agent_backend import AgentLoopBackend
+            from aloop.agent_backend import ALoop
 
             sid = "test_fixed"
             fresh = AgentSession(session_id=sid)
@@ -189,23 +189,23 @@ class TestResolveSessionClearing:
             fresh.last_active = time.time()
             fresh.save_context()
 
-            backend = AgentLoopBackend(model="minimax-m2.5", api_key="test")
-            resolved = backend._resolve_session(kwargs={"session_key": sid})
+            backend = ALoop(model="minimax-m2.5", api_key="test")
+            resolved = backend._resolve_session(kwargs={"session_id": sid})
             assert len(resolved.messages) == 1
 
     def test_new_session_not_cleared(self, tmp_path):
         """Brand-new session (no prior save) is not cleared."""
         with patch("aloop.session._sessions_dir", return_value=tmp_path):
-            from aloop.agent_backend import AgentLoopBackend
+            from aloop.agent_backend import ALoop
 
-            backend = AgentLoopBackend(model="minimax-m2.5", api_key="test")
-            resolved = backend._resolve_session(kwargs={"session_key": "new_session"})
+            backend = ALoop(model="minimax-m2.5", api_key="test")
+            resolved = backend._resolve_session(kwargs={"session_id": "new_session"})
             assert resolved.messages == []
 
     def test_custom_thresholds_via_init(self, tmp_path):
         """__init__ params propagate to staleness check."""
         with patch("aloop.session._sessions_dir", return_value=tmp_path):
-            from aloop.agent_backend import AgentLoopBackend
+            from aloop.agent_backend import ALoop
 
             sid = "test_fixed"
             messages = [{"role": "user", "content": "hi"}] * 10
@@ -214,18 +214,18 @@ class TestResolveSessionClearing:
             )
 
             # Default thresholds: not stale (60s < 14400s, 10 < 100)
-            b1 = AgentLoopBackend(model="minimax-m2.5", api_key="test")
-            r1 = b1._resolve_session(kwargs={"session_key": sid})
+            b1 = ALoop(model="minimax-m2.5", api_key="test")
+            r1 = b1._resolve_session(kwargs={"session_id": sid})
             assert len(r1.messages) == 10
 
             # Tight thresholds: stale
-            b2 = AgentLoopBackend(
+            b2 = ALoop(
                 model="minimax-m2.5",
                 api_key="test",
                 max_session_age=30.0,
                 max_session_messages=5,
             )
-            r2 = b2._resolve_session(kwargs={"session_key": sid})
+            r2 = b2._resolve_session(kwargs={"session_id": sid})
             assert r2.messages == []
 
 
@@ -236,12 +236,12 @@ class TestResolveSessionClearing:
 
 class TestEmptyResponse:
     @pytest.mark.asyncio
-    async def test_empty_response_yields_complete(self):
-        """Model returning no content + no tool_calls -> COMPLETE, not ERROR."""
-        from aloop.agent_backend import AgentLoopBackend
+    async def test_empty_response_yields_loop_end(self):
+        """Model returning no content + no tool_calls -> LOOP_END, not ERROR."""
+        from aloop.agent_backend import ALoop
         from aloop.types import EventType
 
-        backend = AgentLoopBackend(model="minimax-m2.5", api_key="test-key")
+        backend = ALoop(model="minimax-m2.5", api_key="test-key")
 
         async def mock_stream(*args, **kwargs):
             yield {"type": "usage", "usage": {"prompt_tokens": 10, "completion_tokens": 0}}
@@ -252,16 +252,16 @@ class TestEmptyResponse:
                 events.append(event)
 
         types = [e.type for e in events]
-        assert EventType.COMPLETE in types, f"expected COMPLETE, got {types}"
+        assert EventType.LOOP_END in types, f"expected LOOP_END, got {types}"
         assert EventType.ERROR not in types, f"unexpected ERROR in {types}"
 
     @pytest.mark.asyncio
     async def test_empty_response_preserves_accumulated_text(self):
         """If prior turns had content, accumulated_text is preserved."""
-        from aloop.agent_backend import AgentLoopBackend
+        from aloop.agent_backend import ALoop
         from aloop.types import EventType
 
-        backend = AgentLoopBackend(model="minimax-m2.5", api_key="test-key")
+        backend = ALoop(model="minimax-m2.5", api_key="test-key")
         call_count = 0
 
         async def mock_stream(*args, **kwargs):
@@ -295,24 +295,24 @@ class TestEmptyResponse:
             async for event in backend.stream("test", tools=[test_tool]):
                 events.append(event)
 
-        complete = next(e for e in events if e.type == EventType.COMPLETE)
-        assert complete.data["text"] == "thinking..."
+        loop_end = next(e for e in events if e.type == EventType.LOOP_END)
+        assert loop_end.data["text"] == "thinking..."
 
     @pytest.mark.asyncio
     async def test_empty_response_no_empty_assistant_in_messages(self, tmp_path):
         """Session messages must not contain empty assistant message."""
-        from aloop.agent_backend import AgentLoopBackend
+        from aloop.agent_backend import ALoop
         from aloop.types import EventType
 
         with patch("aloop.session._sessions_dir", return_value=tmp_path):
-            backend = AgentLoopBackend(model="minimax-m2.5", api_key="test-key")
+            backend = ALoop(model="minimax-m2.5", api_key="test-key")
 
             async def mock_stream(*args, **kwargs):
                 yield {"type": "usage", "usage": {"prompt_tokens": 10, "completion_tokens": 0}}
 
             with patch.object(backend, "_stream_completion", side_effect=mock_stream):
                 events = []
-                async for event in backend.stream("test", session_key="test_empty"):
+                async for event in backend.stream("test", session_id="test_empty"):
                     events.append(event)
 
             # Load the session and check messages
@@ -324,11 +324,11 @@ class TestEmptyResponse:
 
     @pytest.mark.asyncio
     async def test_empty_response_run_returns_result(self):
-        """run() returns InferenceResult, not raises, on empty response."""
-        from aloop.agent_backend import AgentLoopBackend
-        from aloop.types import InferenceResult
+        """run() returns RunResult, not raises, on empty response."""
+        from aloop.agent_backend import ALoop
+        from aloop.types import RunResult
 
-        backend = AgentLoopBackend(model="minimax-m2.5", api_key="test-key")
+        backend = ALoop(model="minimax-m2.5", api_key="test-key")
 
         async def mock_stream(*args, **kwargs):
             yield {"type": "usage", "usage": {"prompt_tokens": 10, "completion_tokens": 0}}
@@ -336,5 +336,5 @@ class TestEmptyResponse:
         with patch.object(backend, "_stream_completion", side_effect=mock_stream):
             result = await backend.run("test prompt")
 
-        assert isinstance(result, InferenceResult)
+        assert isinstance(result, RunResult)
         assert result.text == ""

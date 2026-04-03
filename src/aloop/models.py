@@ -69,7 +69,8 @@ def _load_models() -> dict[str, ModelConfig]:
     models = dict(DEFAULT_MODELS)
     if _config_path().exists():
         try:
-            data = json.loads(_config_path().read_text(encoding="utf-8"))
+            from .utils import load_jsonc
+            data = load_jsonc(_config_path())
         except (OSError, json.JSONDecodeError):
             data = {}
         for key, raw in data.get("models", {}).items():

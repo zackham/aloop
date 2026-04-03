@@ -7,6 +7,7 @@ import inspect
 import json
 import os
 import time
+import uuid
 from typing import Any, AsyncIterator
 
 import httpx
@@ -21,13 +22,24 @@ from .compaction import (
     restore_recent_files,
     should_compact,
 )
+from .config import LoopConfig, load_mode, resolve_mode_system_prompt
 from .models import ModelConfig, get_model
 from .providers import ProviderConfig, get_provider, get_default_provider_name
+from .types import ModeConflictError
 from .session import AgentSession
-from .hooks import run_before_tool, run_register_tools
+from .hooks import (
+    run_before_tool,
+    run_register_tools,
+    run_on_loop_start,
+    run_on_loop_end,
+    run_on_turn_start,
+    run_on_turn_end,
+    run_on_pre_compaction,
+    run_on_post_compaction,
+)
 from .tools import ANALYSIS_TOOLS
-from .tools_base import ToolDef, ToolResult
-from .types import EventType, InferenceError, InferenceEvent, InferenceResult
+from .tools_base import ToolDef, ToolRejected, ToolResult
+from .types import EventType, InferenceError, InferenceEvent, RunResult
 
 MAX_RETRIES = 2
 RETRY_DELAY = 1.0
@@ -38,17 +50,19 @@ MAX_CONSECUTIVE_COMPACTION_FAILURES = 3
 
 
 
-class AgentLoopBackend:
+class ALoop:
     def __init__(
         self,
         model: str | ModelConfig,
         api_key: str | None = None,
         provider: str | ProviderConfig | None = None,
-        max_iterations: int = 50,
+        config: LoopConfig | None = None,
         max_retry_delay: float = 60.0,
+        # Deprecated individual params — use config instead
+        max_iterations: int | None = None,
         compaction_settings: CompactionSettings | None = None,
-        max_session_age: float = 14400.0,
-        max_session_messages: int = 100,
+        max_session_age: float | None = None,
+        max_session_messages: int | None = None,
     ):
         self.model_config = get_model(model) if isinstance(model, str) else model
 
@@ -66,14 +80,39 @@ class AgentLoopBackend:
             or (os.environ.get(self.provider.env_key, "") if self.provider.env_key else "")
             or os.environ.get("ALOOP_API_KEY", "")
         )
-        self.max_iterations = max_iterations
+
+        # Build effective config: explicit config > individual params > defaults
+        if config is None:
+            config = LoopConfig()
+        self.config = config
+
+        # Individual params override config for backward compat
+        if max_iterations is not None:
+            self.config.max_iterations = max_iterations
+        if max_session_age is not None:
+            self.config.max_session_age = max_session_age
+        if max_session_messages is not None:
+            self.config.max_session_messages = max_session_messages
+        if compaction_settings is not None:
+            self.config.compaction = compaction_settings
+
+        # Convenience accessors
+        self.max_iterations = self.config.max_iterations
         self.max_retry_delay = max_retry_delay
-        self.max_session_age = max_session_age
-        self.max_session_messages = max_session_messages
+        self.max_session_age = self.config.max_session_age
+        self.max_session_messages = self.config.max_session_messages
+
+        self._session_modes: dict[str, str] = {}  # session_id -> mode_name
+
+        # Store constructor defaults (mode overrides are per-stream-call)
+        self._default_model_config = self.model_config
+        self._default_provider = self.provider
+        self._default_compaction = self.config.compaction
+        self._default_max_iterations = self.config.max_iterations
 
         self._input_tokens = 0
         self._output_tokens = 0
-        self.compaction_settings = compaction_settings or CompactionSettings()
+        self.compaction_settings = self.config.compaction
         self._last_compaction: CompactionEntry | None = None
         self._last_usage: dict | None = None
         self._last_usage_index: int | None = None
@@ -98,26 +137,141 @@ class AgentLoopBackend:
     async def stream(
         self,
         prompt: str,
+        *,
         system_prompt: str | None = None,
         tools: list[ToolDef] | None = None,
+        extra_tools: list[ToolDef] | None = None,
+        session_id: str | None = None,
+        mode: str | None = None,
+        persist_session: bool = True,
+        inject_context: bool = True,
+        response_format: dict | None = None,
+        context: dict | None = None,
+        # Deprecated — use session_id
+        session_key: str | None = None,
         **kwargs,
     ) -> AsyncIterator[InferenceEvent]:
         if not self.api_key:
             yield InferenceEvent.error("OPENROUTER_API_KEY is not configured")
             return
 
-        if tools is None:
-            tools = list(ANALYSIS_TOOLS)
-        tool_context = self._build_tool_context(kwargs=kwargs)
-        response_format = kwargs.get("response_format")
+        # Backward compat: session_key → session_id
+        if session_id is None and session_key is not None:
+            session_id = session_key
 
-        session = self._resolve_session(kwargs=kwargs)
+        # ── Mode resolution ──────────────────────────────────────────
+        # Precedence: explicit stream() kwargs > mode config > constructor defaults
+        mode_config: dict = {}
+        effective_model_config = self._default_model_config
+        effective_provider = self._default_provider
+        effective_compaction = self._default_compaction
+        effective_max_iterations = self._default_max_iterations
+
+        if mode is not None:
+            # Load project config for mode definitions
+            from .system_prompt import _load_aloop_config
+            from . import get_project_root
+            project_root = get_project_root()
+            project_config = _load_aloop_config(project_root)
+            mode_config = load_mode(mode, project_config)
+
+            # ModeConflictError: same session, different mode
+            if session_id and session_id in self._session_modes:
+                existing_mode = self._session_modes[session_id]
+                if existing_mode != mode:
+                    raise ModeConflictError(
+                        f"Session {session_id!r} was created with mode {existing_mode!r}, "
+                        f"cannot switch to {mode!r}. Create a new session."
+                    )
+
+            # Track mode for this session
+            if session_id:
+                self._session_modes[session_id] = mode
+
+            # Apply mode's model (unless overridden by explicit stream kwargs —
+            # we can't detect that here, so model/provider in mode only apply
+            # if they are present in mode_config)
+            if "model" in mode_config:
+                effective_model_config = get_model(mode_config["model"])
+            if "provider" in mode_config:
+                p = mode_config["provider"]
+                effective_provider = get_provider(p) if isinstance(p, str) else p
+            if "compaction" in mode_config:
+                mc = mode_config["compaction"]
+                effective_compaction = CompactionSettings(
+                    enabled=mc.get("enabled", effective_compaction.enabled),
+                    reserve_tokens=mc.get("reserve_tokens", effective_compaction.reserve_tokens),
+                    keep_recent_tokens=mc.get("keep_recent_tokens", effective_compaction.keep_recent_tokens),
+                    max_tool_result_chars=mc.get("max_tool_result_chars", effective_compaction.max_tool_result_chars),
+                    compact_instructions=mc.get("compact_instructions", effective_compaction.compact_instructions),
+                )
+            if "max_iterations" in mode_config:
+                effective_max_iterations = mode_config["max_iterations"]
+
+            # Apply mode's system_prompt (unless caller passed explicit system_prompt)
+            if system_prompt is None:
+                mode_sp = resolve_mode_system_prompt(mode_config)
+                if mode_sp is not None:
+                    system_prompt = mode_sp
+        else:
+            # No mode — still track session as having no mode for conflict detection
+            if session_id and session_id in self._session_modes:
+                existing_mode = self._session_modes[session_id]
+                if existing_mode is not None:
+                    raise ModeConflictError(
+                        f"Session {session_id!r} was created with mode {existing_mode!r}, "
+                        f"cannot switch to no mode. Create a new session."
+                    )
+
+        # Tool merge behavior:
+        # 1. If tools= is explicitly set → REPLACE entire set (explicit override)
+        # 2. Otherwise: start with mode's tool list (or defaults),
+        #    add register_tools hooks, add extra_tools
+        if tools is not None:
+            # Explicit override — use exactly what was passed
+            pass
+        else:
+            if mode_config.get("tools"):
+                # Mode defines a tool whitelist — filter defaults by name
+                all_available = list(ANALYSIS_TOOLS)
+                hook_tools = run_register_tools()
+                if hook_tools:
+                    all_available.extend(hook_tools)
+                allowed_names = set(mode_config["tools"])
+                tools = [t for t in all_available if t.name in allowed_names]
+            else:
+                # Start with defaults
+                tools = list(ANALYSIS_TOOLS)
+                # Add tools from register_tools hooks
+                hook_tools = run_register_tools()
+                if hook_tools:
+                    tools.extend(hook_tools)
+            # Add extra_tools if provided
+            if extra_tools:
+                tools.extend(extra_tools)
+
+        # Apply effective config for this stream call (mode may override).
+        # These are set per-call; _default_* stores the constructor values.
+        self.model_config = effective_model_config
+        self.provider = effective_provider
+        self.compaction_settings = effective_compaction
+        self.max_iterations = effective_max_iterations
+
+        # Build tool context from explicit context dict + any legacy kwargs
+        tool_context = self._build_tool_context(context=context, kwargs=kwargs)
+
+        session = self._resolve_session(
+            session_id=session_id, persist_session=persist_session,
+        )
         if session:
             messages: list[dict[str, Any]] = list(session.messages)
             self._last_compaction = session.last_compaction
         else:
             messages = []
             self._last_compaction = None
+
+        # Resolve the effective session_id for event tagging
+        effective_session_id = session.session_id if session else session_id
 
         if prompt:
             user_msg = {"role": "user", "content": prompt}
@@ -127,7 +281,7 @@ class AgentLoopBackend:
 
         system_prompt, injection_messages = await self._build_system_prompt(
             system_prompt=system_prompt,
-            inject_context=bool(kwargs.get("inject_context", True)),
+            inject_context=inject_context,
             context_kwargs={k: v for k, v in kwargs.items() if k.startswith("topic_")},
         )
 
@@ -139,8 +293,49 @@ class AgentLoopBackend:
         self._last_usage = None
         self._last_usage_index = None
 
+        # Emit LOOP_START before the first turn
+        yield InferenceEvent(
+            EventType.LOOP_START,
+            {
+                "session_id": effective_session_id,
+                "model": self.model_config.id,
+                "provider": self.provider.name,
+            },
+            session_id=effective_session_id,
+        )
+
+        # Hook: on_loop_start
+        loop_hook_context = {
+            "session_id": effective_session_id,
+            "model": self.model_config.id,
+            "provider": self.provider.name,
+            **(tool_context or {}),
+        }
+        run_on_loop_start(loop_hook_context)
+
+        iteration_count = 0
         for iteration in range(self.max_iterations):
-            yield InferenceEvent(EventType.TURN_START, {"iteration": iteration})
+            iteration_count = iteration + 1
+            turn_id = uuid.uuid4().hex[:12]
+
+            # Track per-turn token deltas
+            turn_input_before = self._input_tokens
+            turn_output_before = self._output_tokens
+
+            yield InferenceEvent(
+                EventType.TURN_START,
+                {"iteration": iteration, "turn_id": turn_id},
+                session_id=effective_session_id,
+                turn_id=turn_id,
+            )
+
+            # Hook: on_turn_start
+            run_on_turn_start({
+                "session_id": effective_session_id,
+                "iteration": iteration,
+                "turn_id": turn_id,
+                **(tool_context or {}),
+            })
 
             content = ""
             tool_calls: list[dict[str, Any]] = []
@@ -154,7 +349,10 @@ class AgentLoopBackend:
                         text_delta = delta["text"]
                         content += text_delta
                         accumulated_text += text_delta
-                        yield InferenceEvent.text(text_delta)
+                        evt = InferenceEvent.text(text_delta)
+                        evt.session_id = effective_session_id
+                        evt.turn_id = turn_id
+                        yield evt
 
                     elif delta_type == "tool_call_delta":
                         self._accumulate_tool_call(tool_calls, delta)
@@ -170,7 +368,10 @@ class AgentLoopBackend:
                         )
 
                     elif delta_type == "error":
-                        yield InferenceEvent.error(delta["message"])
+                        evt = InferenceEvent.error(delta["message"])
+                        evt.session_id = effective_session_id
+                        evt.turn_id = turn_id
+                        yield evt
                         if session:
                             session.messages = [m for m in messages if not m.get("_synthetic")]
                             session.last_compaction = self._last_compaction
@@ -178,14 +379,23 @@ class AgentLoopBackend:
                         return
 
             except Exception as exc:
-                yield InferenceEvent.error(str(exc))
+                evt = InferenceEvent.error(str(exc))
+                evt.session_id = effective_session_id
+                evt.turn_id = turn_id
+                yield evt
                 if session:
                     session.messages = [m for m in messages if not m.get("_synthetic")]
                     session.last_compaction = self._last_compaction
                     session.save_context()
                 return
 
-            yield InferenceEvent(EventType.TURN_END, {"iteration": iteration})
+            # Compute per-turn token deltas and cost
+            turn_input_tokens = self._input_tokens - turn_input_before
+            turn_output_tokens = self._output_tokens - turn_output_before
+            turn_cost = (
+                turn_input_tokens * self.model_config.cost_input / 1_000_000
+                + turn_output_tokens * self.model_config.cost_output / 1_000_000
+            ) if (turn_input_tokens or turn_output_tokens) else None
 
             assistant_msg: dict[str, Any]
             if tool_calls:
@@ -214,11 +424,37 @@ class AgentLoopBackend:
                     session.messages = [m for m in messages if not m.get("_synthetic")]
                     session.last_compaction = self._last_compaction
                     session.save_context()
-                yield InferenceEvent.complete(
-                    text=accumulated_text,
-                    session_id=session.session_id if session else None,
-                    cost_usd=self.cost_usd,
-                    usage=self.usage,
+                turn_end_data = {
+                    "iteration": iteration,
+                    "turn_id": turn_id,
+                    "input_tokens": turn_input_tokens,
+                    "output_tokens": turn_output_tokens,
+                    "cost_usd": turn_cost,
+                }
+                yield InferenceEvent(
+                    EventType.TURN_END,
+                    turn_end_data,
+                    session_id=effective_session_id,
+                    turn_id=turn_id,
+                )
+                run_on_turn_end(
+                    {"session_id": effective_session_id, "iteration": iteration, "turn_id": turn_id, **(tool_context or {})},
+                    turn_end_data,
+                )
+                loop_end_data = {
+                    "text": accumulated_text,
+                    "session_id": effective_session_id,
+                    "input_tokens": self._input_tokens,
+                    "output_tokens": self._output_tokens,
+                    "cost_usd": self.cost_usd or None,
+                    "model": self.model_config.id,
+                    "turns": iteration_count,
+                }
+                run_on_loop_end(loop_hook_context, loop_end_data)
+                yield InferenceEvent(
+                    EventType.LOOP_END,
+                    loop_end_data,
+                    session_id=effective_session_id,
                 )
                 return
 
@@ -236,11 +472,37 @@ class AgentLoopBackend:
                     session.last_compaction = self._last_compaction
                     session.save_context()
 
-                yield InferenceEvent.complete(
-                    text=accumulated_text,
-                    session_id=session.session_id if session else None,
-                    cost_usd=self.cost_usd,
-                    usage=self.usage,
+                turn_end_data = {
+                    "iteration": iteration,
+                    "turn_id": turn_id,
+                    "input_tokens": turn_input_tokens,
+                    "output_tokens": turn_output_tokens,
+                    "cost_usd": turn_cost,
+                }
+                yield InferenceEvent(
+                    EventType.TURN_END,
+                    turn_end_data,
+                    session_id=effective_session_id,
+                    turn_id=turn_id,
+                )
+                run_on_turn_end(
+                    {"session_id": effective_session_id, "iteration": iteration, "turn_id": turn_id, **(tool_context or {})},
+                    turn_end_data,
+                )
+                loop_end_data = {
+                    "text": accumulated_text,
+                    "session_id": effective_session_id,
+                    "input_tokens": self._input_tokens,
+                    "output_tokens": self._output_tokens,
+                    "cost_usd": self.cost_usd or None,
+                    "model": self.model_config.id,
+                    "turns": iteration_count,
+                }
+                run_on_loop_end(loop_hook_context, loop_end_data)
+                yield InferenceEvent(
+                    EventType.LOOP_END,
+                    loop_end_data,
+                    session_id=effective_session_id,
                 )
                 return
 
@@ -254,7 +516,10 @@ class AgentLoopBackend:
                 except json.JSONDecodeError:
                     args = {}
 
-                yield InferenceEvent.tool_start(name, tool_call_id, args)
+                evt = InferenceEvent.tool_start(name, tool_call_id, args)
+                evt.session_id = effective_session_id
+                evt.turn_id = turn_id
+                yield evt
 
                 tool_def = next((tool for tool in (tools or []) if tool.name == name), None)
                 if not tool_def:
@@ -265,7 +530,10 @@ class AgentLoopBackend:
                     except Exception as exc:
                         result = ToolResult(content=f"Error: {exc}", is_error=True)
 
-                yield InferenceEvent.tool_end(name, tool_call_id, result.content, result.is_error)
+                evt = InferenceEvent.tool_end(name, tool_call_id, result.content, result.is_error)
+                evt.session_id = effective_session_id
+                evt.turn_id = turn_id
+                yield evt
 
                 overflow_dir = session.session_dir / f"{session.session_id}_tool_results" if session else None
                 persisted = persist_tool_result(
@@ -284,6 +552,25 @@ class AgentLoopBackend:
                 if session:
                     session.log_message(tool_msg)
 
+            # Emit TURN_END after tool execution, before compaction/next iteration
+            turn_end_data = {
+                "iteration": iteration,
+                "turn_id": turn_id,
+                "input_tokens": turn_input_tokens,
+                "output_tokens": turn_output_tokens,
+                "cost_usd": turn_cost,
+            }
+            yield InferenceEvent(
+                EventType.TURN_END,
+                turn_end_data,
+                session_id=effective_session_id,
+                turn_id=turn_id,
+            )
+            run_on_turn_end(
+                {"session_id": effective_session_id, "iteration": iteration, "turn_id": turn_id, **(tool_context or {})},
+                turn_end_data,
+            )
+
             if self.compaction_settings.enabled:
                 # Full compaction — only if over threshold
                 if self._compaction_failures < MAX_CONSECUTIVE_COMPACTION_FAILURES:
@@ -298,10 +585,36 @@ class AgentLoopBackend:
                             self.model_config.context_window,
                             self.compaction_settings,
                         ):
+                            # Hook: on_pre_compaction
+                            compaction_hook_ctx = {
+                                "session_id": effective_session_id,
+                                "context_tokens": ctx_tokens,
+                                "message_count": len(messages),
+                                **(tool_context or {}),
+                            }
+                            extra_instructions = run_on_pre_compaction(compaction_hook_ctx)
+
+                            messages_before_count = len(messages)
+                            tokens_before = ctx_tokens
+
+                            # If hooks returned extra instructions, temporarily
+                            # augment compaction settings
+                            effective_settings = self.compaction_settings
+                            if extra_instructions:
+                                existing = self.compaction_settings.compact_instructions or ""
+                                combined = f"{existing}\n\n{extra_instructions}".strip() if existing else extra_instructions
+                                effective_settings = CompactionSettings(
+                                    enabled=self.compaction_settings.enabled,
+                                    reserve_tokens=self.compaction_settings.reserve_tokens,
+                                    keep_recent_tokens=self.compaction_settings.keep_recent_tokens,
+                                    max_tool_result_chars=self.compaction_settings.max_tool_result_chars,
+                                    compact_instructions=combined,
+                                )
+
                             messages, entry = await compact_context(
                                 messages=messages,
                                 model_config=self.model_config,
-                                settings=self.compaction_settings,
+                                settings=effective_settings,
                                 call_model_fn=self._summarize,
                                 previous_entry=self._last_compaction,
                             )
@@ -316,6 +629,32 @@ class AgentLoopBackend:
                                 )
                                 if restoration:
                                     messages = messages[:1] + restoration + messages[1:]
+
+                                messages_after_count = len(messages)
+                                tokens_after = estimate_context_tokens(
+                                    messages,
+                                    self._last_usage,
+                                    self._last_usage_index,
+                                )
+
+                                yield InferenceEvent(
+                                    EventType.COMPACTION,
+                                    {
+                                        "messages_before": messages_before_count,
+                                        "messages_after": messages_after_count,
+                                        "tokens_saved": tokens_before - tokens_after,
+                                    },
+                                    session_id=effective_session_id,
+                                )
+
+                                # Hook: on_post_compaction
+                                run_on_post_compaction({
+                                    "session_id": effective_session_id,
+                                    "messages_before": messages_before_count,
+                                    "messages_after": messages_after_count,
+                                    "tokens_saved": tokens_before - tokens_after,
+                                    **(tool_context or {}),
+                                })
 
                                 if session:
                                     session.log_event(
@@ -354,29 +693,51 @@ class AgentLoopBackend:
             session.last_compaction = self._last_compaction
             session.save_context()
 
+        # Hook: on_loop_end (max iterations reached)
+        run_on_loop_end(loop_hook_context, {
+            "text": accumulated_text,
+            "session_id": effective_session_id,
+            "error": f"Max iterations ({self.max_iterations}) reached",
+            "turns": iteration_count,
+        })
         yield InferenceEvent.error(f"Max iterations ({self.max_iterations}) reached")
 
-    async def run(self, prompt: str, **kwargs) -> InferenceResult:
-        result: InferenceResult | None = None
+    async def run(self, prompt: str, **kwargs) -> RunResult:
+        result: RunResult | None = None
 
         async for event in self.stream(prompt, **kwargs):
-            if event.type == EventType.COMPLETE:
-                result = InferenceResult(
+            if event.type == EventType.LOOP_END:
+                result = RunResult(
                     text=event.data.get("text", ""),
                     session_id=event.data.get("session_id"),
+                    input_tokens=event.data.get("input_tokens", 0),
+                    output_tokens=event.data.get("output_tokens", 0),
                     cost_usd=event.data.get("cost_usd"),
-                    usage=event.data.get("usage"),
+                    model=event.data.get("model"),
+                    turns=event.data.get("turns", 0),
                 )
             elif event.type == EventType.ERROR:
                 raise InferenceError(event.data.get("message", "Unknown error"))
 
-        return result or InferenceResult(text="")
+        return result or RunResult(text="")
 
-    def _resolve_session(self, kwargs: dict) -> AgentSession | None:
-        if kwargs.get("persist_session", True) is False:
+    def _resolve_session(
+        self,
+        session_id: str | None = None,
+        persist_session: bool = True,
+        # Deprecated: accept kwargs dict for backward compat
+        kwargs: dict | None = None,
+    ) -> AgentSession | None:
+        # Backward compat: pull from kwargs if explicit params not set
+        if kwargs is not None:
+            if persist_session and kwargs.get("persist_session", True) is False:
+                persist_session = False
+            if session_id is None:
+                session_id = kwargs.get("session_key") or kwargs.get("session_id")
+
+        if not persist_session:
             return None
 
-        session_id = kwargs.get("session_key") or kwargs.get("session_id")
         if not session_id:
             return None
 
@@ -457,23 +818,36 @@ class AgentLoopBackend:
             return "".join(text_parts)
         return str(content)
 
-    def _build_tool_context(self, kwargs: dict) -> dict:
+    def _build_tool_context(
+        self,
+        context: dict | None = None,
+        kwargs: dict | None = None,
+    ) -> dict:
+        # Explicit context dict takes priority
+        if context is not None:
+            return dict(context)
+
+        # Legacy: build from kwargs
+        if kwargs is None:
+            return {}
+
         explicit = kwargs.get("tool_context")
         if isinstance(explicit, dict):
             return dict(explicit)
 
-        context: dict[str, Any] = {}
+        result: dict[str, Any] = {}
         for key in (
             "topic_id",
             "chat_id",
             "message_thread_id",
             "trigger",
             "session_key",
+            "session_id",
         ):
             value = kwargs.get(key)
             if value is not None:
-                context[key] = value
-        return context
+                result[key] = value
+        return result
 
     async def _execute_tool(
         self,
@@ -487,6 +861,9 @@ class AgentLoopBackend:
             tool_def.name, args, **(tool_context or {}),
         )
         if not hook_result.get("allow", True):
+            # Check for ToolResult short-circuit from hook
+            if "tool_result" in hook_result:
+                return hook_result["tool_result"]
             return ToolResult(
                 content=hook_result.get("reason", f"Blocked by hook: {tool_def.name}"),
                 is_error=True,
@@ -636,3 +1013,7 @@ class AgentLoopBackend:
 
                 yield {"type": "error", "message": f"HTTP error: {exc}"}
                 return
+
+
+# Deprecated alias — use ALoop instead
+AgentLoopBackend = ALoop

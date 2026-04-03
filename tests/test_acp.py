@@ -156,9 +156,7 @@ async def test_prompt_text_delta(agent, mock_conn, tmp_path):
     events = [
         InferenceEvent.text("Hello "),
         InferenceEvent.text("world"),
-        InferenceEvent.complete(text="Hello world", cost_usd=0.001, usage={
-            "input_tokens": 100, "output_tokens": 50, "cost_usd": 0.001,
-        }),
+        InferenceEvent.loop_end(text="Hello world", cost_usd=0.001, input_tokens=100, output_tokens=50, model="minimax-m2.5", turns=1),
     ]
 
     with patch.object(state.backend, "stream", return_value=_fake_stream(events)):
@@ -170,11 +168,11 @@ async def test_prompt_text_delta(agent, mock_conn, tmp_path):
 
     assert result.stop_reason == "end_turn"
 
-    # Check session_update calls: 2 text deltas + 1 usage update
+    # Check session_update calls: 2 text deltas (LOOP_END returns without emitting)
     calls = mock_conn.session_update.call_args_list
-    assert len(calls) == 3
+    assert len(calls) == 2
 
-    # First two are text chunks
+    # Both are text chunks
     for i in range(2):
         call_kwargs = calls[i].kwargs
         assert call_kwargs["session_id"] == sid
@@ -192,9 +190,7 @@ async def test_prompt_tool_start_and_end(agent, mock_conn, tmp_path):
     events = [
         InferenceEvent.tool_start("read_file", "tc_001", {"file_path": "/tmp/test.txt"}),
         InferenceEvent.tool_end("read_file", "tc_001", "file contents here", is_error=False),
-        InferenceEvent.complete(text="", cost_usd=0.001, usage={
-            "input_tokens": 100, "output_tokens": 50, "cost_usd": 0.001,
-        }),
+        InferenceEvent.loop_end(text="", cost_usd=0.001, input_tokens=100, output_tokens=50, model="minimax-m2.5", turns=1),
     ]
 
     with patch.object(state.backend, "stream", return_value=_fake_stream(events)):
@@ -207,7 +203,7 @@ async def test_prompt_tool_start_and_end(agent, mock_conn, tmp_path):
     assert result.stop_reason == "end_turn"
 
     calls = mock_conn.session_update.call_args_list
-    assert len(calls) == 3  # tool_call + tool_call_update + usage_update
+    assert len(calls) == 2  # tool_call + tool_call_update
 
     # Tool start
     tool_start_update = calls[0].kwargs["update"]
@@ -234,9 +230,7 @@ async def test_prompt_tool_error(agent, mock_conn, tmp_path):
     events = [
         InferenceEvent.tool_start("bash", "tc_002", {"command": "false"}),
         InferenceEvent.tool_end("bash", "tc_002", "command failed", is_error=True),
-        InferenceEvent.complete(text="", cost_usd=0.0, usage={
-            "input_tokens": 50, "output_tokens": 20, "cost_usd": 0.0,
-        }),
+        InferenceEvent.loop_end(text="", cost_usd=0.0, input_tokens=50, output_tokens=20, model="minimax-m2.5", turns=1),
     ]
 
     with patch.object(state.backend, "stream", return_value=_fake_stream(events)):
@@ -261,9 +255,7 @@ async def test_prompt_thinking_delta(agent, mock_conn, tmp_path):
     events = [
         InferenceEvent(EventType.THINKING_DELTA, {"text": "Let me think..."}),
         InferenceEvent.text("Answer"),
-        InferenceEvent.complete(text="Answer", cost_usd=0.0, usage={
-            "input_tokens": 50, "output_tokens": 10, "cost_usd": 0.0,
-        }),
+        InferenceEvent.loop_end(text="Answer", cost_usd=0.0, input_tokens=50, output_tokens=10, model="minimax-m2.5", turns=1),
     ]
 
     with patch.object(state.backend, "stream", return_value=_fake_stream(events)):
@@ -280,16 +272,21 @@ async def test_prompt_thinking_delta(agent, mock_conn, tmp_path):
 
 @pytest.mark.asyncio
 async def test_prompt_usage_update(agent, mock_conn, tmp_path):
-    """COMPLETE event sends usage_update with cost and token counts."""
+    """TURN_END event sends usage_update with cost and token counts."""
     resp = await agent.new_session(cwd=str(tmp_path))
     sid = resp.session_id
     state = agent._sessions[sid]
 
     events = [
         InferenceEvent.text("Done"),
-        InferenceEvent.complete(text="Done", cost_usd=0.042, usage={
-            "input_tokens": 1000, "output_tokens": 500, "cost_usd": 0.042,
+        InferenceEvent(EventType.TURN_END, {
+            "iteration": 0,
+            "turn_id": "abc123",
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "cost_usd": 0.042,
         }),
+        InferenceEvent.loop_end(text="Done", cost_usd=0.042, input_tokens=1000, output_tokens=500, model="minimax-m2.5", turns=1),
     ]
 
     with patch.object(state.backend, "stream", return_value=_fake_stream(events)):
@@ -300,9 +297,10 @@ async def test_prompt_usage_update(agent, mock_conn, tmp_path):
         )
 
     calls = mock_conn.session_update.call_args_list
-    # Last call should be usage_update
-    usage_update = calls[-1].kwargs["update"]
-    assert usage_update.session_update == "usage_update"
+    # text_delta + usage_update from TURN_END
+    usage_calls = [c for c in calls if c.kwargs["update"].session_update == "usage_update"]
+    assert len(usage_calls) == 1
+    usage_update = usage_calls[0].kwargs["update"]
     assert usage_update.cost is not None
     assert usage_update.cost.amount == 0.042
     assert usage_update.cost.currency == "USD"
@@ -341,9 +339,7 @@ async def test_prompt_cancellation(agent, mock_conn, tmp_path):
         # Simulate cancel happening mid-stream
         state.cancel_event.set()
         yield InferenceEvent.text("This should not be sent")
-        yield InferenceEvent.complete(text="", cost_usd=0.0, usage={
-            "input_tokens": 10, "output_tokens": 5, "cost_usd": 0.0,
-        })
+        yield InferenceEvent.loop_end(text="", cost_usd=0.0, input_tokens=10, output_tokens=5, model="minimax-m2.5", turns=1)
 
     with patch.object(state.backend, "stream", side_effect=slow_stream):
         from acp.schema import TextContentBlock
@@ -377,9 +373,7 @@ async def test_prompt_clears_cancel_event(agent, tmp_path):
     state.cancel_event.set()
 
     events = [
-        InferenceEvent.complete(text="", cost_usd=0.0, usage={
-            "input_tokens": 10, "output_tokens": 5, "cost_usd": 0.0,
-        }),
+        InferenceEvent.loop_end(text="", cost_usd=0.0, input_tokens=10, output_tokens=5, model="minimax-m2.5", turns=1),
     ]
 
     with patch.object(state.backend, "stream", return_value=_fake_stream(events)):
@@ -405,9 +399,7 @@ async def test_turn_start_ignored(agent, mock_conn, tmp_path):
 
     events = [
         InferenceEvent(EventType.TURN_START, {"iteration": 0}),
-        InferenceEvent.complete(text="", cost_usd=0.0, usage={
-            "input_tokens": 10, "output_tokens": 5, "cost_usd": 0.0,
-        }),
+        InferenceEvent.loop_end(text="", cost_usd=0.0, input_tokens=10, output_tokens=5, model="minimax-m2.5", turns=1),
     ]
 
     with patch.object(state.backend, "stream", return_value=_fake_stream(events)):
@@ -417,10 +409,9 @@ async def test_turn_start_ignored(agent, mock_conn, tmp_path):
             session_id=sid,
         )
 
-    # Only the usage_update from COMPLETE, no notification for TURN_START
+    # TURN_START and LOOP_END produce no ACP session_update notifications
     calls = mock_conn.session_update.call_args_list
-    assert len(calls) == 1
-    assert calls[0].kwargs["update"].session_update == "usage_update"
+    assert len(calls) == 0
 
 
 # ── Helper functions ───────────────────────────────────────────────────
@@ -497,9 +488,7 @@ async def test_prompt_response_includes_usage(agent, mock_conn, tmp_path):
     state.backend._output_tokens = 200
 
     events = [
-        InferenceEvent.complete(text="Done", cost_usd=0.01, usage={
-            "input_tokens": 500, "output_tokens": 200, "cost_usd": 0.01,
-        }),
+        InferenceEvent.loop_end(text="Done", cost_usd=0.01, input_tokens=500, output_tokens=200, model="minimax-m2.5", turns=1),
     ]
 
     with patch.object(state.backend, "stream", return_value=_fake_stream(events)):

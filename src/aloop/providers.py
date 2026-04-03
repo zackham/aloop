@@ -100,7 +100,8 @@ def _load_user_providers() -> dict[str, ProviderConfig]:
         return {}
 
     try:
-        data = json.loads(path.read_text())
+        from .utils import load_jsonc
+        data = load_jsonc(path)
     except (OSError, json.JSONDecodeError):
         return {}
 
@@ -136,14 +137,28 @@ def get_provider(name: str) -> ProviderConfig:
 
 
 def get_default_provider_name() -> str:
-    """Read default provider from ~/.aloop/config.json, or return 'openrouter'."""
-    config_path = Path.home() / ".aloop" / "config.json"
-    if config_path.exists():
-        try:
-            data = json.loads(config_path.read_text())
-            name = data.get("provider")
-            if isinstance(name, str) and name.strip():
-                return name.strip()
-        except (OSError, json.JSONDecodeError):
-            pass
+    """Read default provider from merged config, or return 'openrouter'.
+
+    Checks merged global + project config via system_prompt._load_aloop_config().
+    Falls back to reading ~/.aloop/config.json directly if import fails.
+    """
+    try:
+        from .system_prompt import _load_aloop_config
+        from . import get_project_root
+        config = _load_aloop_config(get_project_root())
+        name = config.get("provider") or config.get("default_provider")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    except Exception:
+        # Fallback: read global config directly (supports JSONC comments)
+        config_path = Path.home() / ".aloop" / "config.json"
+        if config_path.exists():
+            try:
+                from .utils import load_jsonc
+                data = load_jsonc(config_path)
+                name = data.get("provider")
+                if isinstance(name, str) and name.strip():
+                    return name.strip()
+            except (OSError, json.JSONDecodeError):
+                pass
     return DEFAULT_PROVIDER
