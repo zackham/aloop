@@ -2,20 +2,12 @@
 
 A provider-agnostic, embeddable agent loop. Use any LLM from any provider, extend through hooks, embed as a Python library, drive from the CLI, or expose as an ACP server.
 
-## Install
+## Quickstart
 
 ```bash
 uv tool install git+https://github.com/zackham/aloop.git
+aloop --model x-ai/grok-4.1-fast "what files are in this directory?"
 ```
-
-Requires Python 3.12+ and an API key:
-
-```bash
-export ALOOP_MODEL="x-ai/grok-4.1-fast"
-export OPENROUTER_API_KEY="sk-or-..."
-```
-
-Or just run `aloop` — it prompts for your key on first use. Run `aloop init` to scaffold project config.
 
 ## Documentation
 
