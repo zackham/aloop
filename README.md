@@ -2,7 +2,7 @@
 
 A provider-agnostic, embeddable agent loop. Use any LLM from any provider, extend through hooks, embed as a Python library, drive from the CLI, or expose as an ACP server.
 
-[Embedding](docs/EMBEDDING.md) · [CLI](docs/CLI.md) · [ACP](docs/ACP.md) · [Hooks](docs/HOOKS.md) · [System Prompt](docs/SYSTEM-PROMPT.md) · [Compaction](docs/COMPACTION.md) · [File Resolution](docs/FILE-RESOLUTION.md) · [Config](docs/CONFIG.md) · [Architecture](docs/ARCHITECTURE.md)
+[Embedding](docs/EMBEDDING.md) · [CLI](docs/CLI.md) · [ACP](docs/ACP.md) · [Hooks](docs/HOOKS.md) · [System Prompt](docs/SYSTEM-PROMPT.md) · [Config](docs/CONFIG.md) · [Architecture](docs/ARCHITECTURE.md)
 
 ---
 
@@ -112,18 +112,14 @@ Or just run `aloop` — it prompts for your key on first use. Run `aloop init` t
 
 ## Documentation
 
-| Guide | What it covers |
-|-------|---------------|
-| **[Embedding](docs/EMBEDDING.md)** | Python API, `ALoop`, `stream()`, events, tools, sessions, providers |
-| **[CLI](docs/CLI.md)** | Subcommands, flags, output formats, scripting |
-| **[ACP](docs/ACP.md)** | acpx, Stepwise, editors, protocol details, modes |
-| **[Hooks](docs/HOOKS.md)** | 10 hook points, `@tool` decorator, `ToolRejected`, execution order |
-| **[System Prompt](docs/SYSTEM-PROMPT.md)** | Full prompt text, template mode, section overrides |
-| **[Compaction](docs/COMPACTION.md)** | Context summarization, file restoration, circuit breaker |
-| **[File Resolution](docs/FILE-RESOLUTION.md)** | Discovery chains, global/project layering, merge rules |
-| **[Config](docs/CONFIG.md)** | JSONC config, modes, global/project layering |
-| **[AGENTS.md](docs/AGENTS-MD.md)** | Project instruction file convention |
-| **[Architecture](docs/ARCHITECTURE.md)** | Data flow, compaction, module map |
+**Usage:**
+[Embedding](docs/EMBEDDING.md) · [CLI](docs/CLI.md) · [ACP](docs/ACP.md)
+
+**Configuration:**
+[System Prompt](docs/SYSTEM-PROMPT.md) · [Hooks](docs/HOOKS.md) · [Config](docs/CONFIG.md) · [AGENTS.md](docs/AGENTS-MD.md)
+
+**Internals:**
+[Compaction](docs/COMPACTION.md) · [File Resolution](docs/FILE-RESOLUTION.md) · [Architecture](docs/ARCHITECTURE.md)
 
 ## License
 
