@@ -2,7 +2,7 @@
 
 A provider-agnostic, embeddable agent loop. Use any LLM from any provider, extend through hooks, embed as a Python library or expose as an ACP server. No vendor lock-in, no framework opinions.
 
-[Install](#install) · [System Prompt](docs/SYSTEM-PROMPT.md) · [Hooks](docs/HOOKS.md) · [Config](docs/CONFIG.md) · [AGENTS.md](docs/AGENTS-MD.md) · [Architecture](docs/ARCHITECTURE.md) · [Changelog](CHANGELOG.md)
+[Embedding](docs/EMBEDDING.md) · [CLI](docs/CLI.md) · [ACP](docs/ACP.md) · [Hooks](docs/HOOKS.md) · [System Prompt](docs/SYSTEM-PROMPT.md) · [Config](docs/CONFIG.md) · [Architecture](docs/ARCHITECTURE.md)
 
 ---
 
@@ -164,10 +164,13 @@ See `aloop --help` for all options, or `aloop list-providers` / `aloop validate-
 
 aloop discovers project configuration from the current working directory. See the dedicated docs for details:
 
-- **[System Prompt](docs/SYSTEM-PROMPT.md)** — full prompt transparency, template mode, section overrides, context injection
-- **[AGENTS.md convention](docs/AGENTS-MD.md)** — project-specific instructions for the agent
-- **[Configuration](docs/CONFIG.md)** — `.aloop/config.json` schema, model aliases, compaction tuning
+- **[Embedding Guide](docs/EMBEDDING.md)** — Python API, events, custom tools, sessions, providers
+- **[CLI Reference](docs/CLI.md)** — flags, output formats, scripting patterns
+- **[ACP Integration](docs/ACP.md)** — acpx, Stepwise, editors, protocol details
 - **[Hooks](docs/HOOKS.md)** — extension points, `@hook` decorator, examples
+- **[System Prompt](docs/SYSTEM-PROMPT.md)** — full prompt transparency, template mode, overrides
+- **[Config](docs/CONFIG.md)** — `.aloop/config.json` schema, compaction tuning
+- **[AGENTS.md](docs/AGENTS-MD.md)** — project instruction convention
 - **[Architecture](docs/ARCHITECTURE.md)** — data flow, compaction internals, module map
 
 ## Extending
