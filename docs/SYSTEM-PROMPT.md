@@ -174,7 +174,7 @@ Beyond the static system prompt, `gather_context` hooks can append dynamic conte
 
 ## Caching
 
-The system prompt is designed for prefix caching (automatic on OpenRouter and Anthropic):
+The system prompt is designed for prefix caching:
 
 - System prompt is 100% static — no timestamps, no changing content
 - AGENTS.md is part of the system prompt (also static)
