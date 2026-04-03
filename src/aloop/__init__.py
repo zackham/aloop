@@ -7,7 +7,7 @@ system prompt. Projects define themselves via AGENTS.md and .aloop/ config.
 from pathlib import Path
 import os
 
-__version__ = "1.0.0"
+__version__ = "0.3.0"
 
 # Project root discovery: ALOOP_PROJECT_ROOT env var, or CWD
 def get_project_root() -> Path:

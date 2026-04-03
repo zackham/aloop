@@ -2,7 +2,7 @@
 
 All notable changes to aloop are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [1.0.0] - 2026-04-03
+## [0.3.0] - 2026-04-03
 
 ### Breaking
 - Renamed `AgentLoopBackend` to `ALoop` (`AgentLoopBackend` kept as deprecated alias with warning)
