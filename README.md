@@ -2,7 +2,7 @@
 
 A provider-agnostic, embeddable agent loop. Use any LLM from any provider, extend through hooks, embed as a Python library, drive from the CLI, or expose as an ACP server.
 
-[Embedding](docs/EMBEDDING.md) · [CLI](docs/CLI.md) · [ACP](docs/ACP.md) · [Hooks](docs/HOOKS.md) · [System Prompt](docs/SYSTEM-PROMPT.md) · [Config](docs/CONFIG.md) · [Architecture](docs/ARCHITECTURE.md)
+[Embedding](docs/EMBEDDING.md) · [CLI](docs/CLI.md) · [ACP](docs/ACP.md) · [Hooks](docs/HOOKS.md) · [System Prompt](docs/SYSTEM-PROMPT.md) · [Compaction](docs/COMPACTION.md) · [Config](docs/CONFIG.md) · [Architecture](docs/ARCHITECTURE.md)
 
 ---
 
@@ -119,6 +119,7 @@ Or just run `aloop` — it prompts for your key on first use. Run `aloop init` t
 | **[ACP](docs/ACP.md)** | acpx, Stepwise, editors, protocol details, modes |
 | **[Hooks](docs/HOOKS.md)** | 10 hook points, `@tool` decorator, `ToolRejected`, execution order |
 | **[System Prompt](docs/SYSTEM-PROMPT.md)** | Full prompt text, template mode, section overrides |
+| **[Compaction](docs/COMPACTION.md)** | Context summarization, file restoration, circuit breaker |
 | **[Config](docs/CONFIG.md)** | JSONC config, modes, global/project layering |
 | **[AGENTS.md](docs/AGENTS-MD.md)** | Project instruction file convention |
 | **[Architecture](docs/ARCHITECTURE.md)** | Data flow, compaction, module map |
