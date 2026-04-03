@@ -41,8 +41,8 @@ Prints the response and exits. The session ID is printed to stderr so it doesn't
 ### Pipe
 
 ```bash
-cat error.log | aloop -p "What went wrong?"
-echo "Summarize this" | aloop -p
+cat error.log | aloop "What went wrong?"
+echo "Summarize this" | aloop
 ```
 
 Pipe input implies `-p` (one-shot). Stdin is used as the prompt.
@@ -59,13 +59,13 @@ aloop "Read the config files"
 # session: a7b3c9d2e1f4
 
 # Continue the most recent session
-aloop -c "Now explain the auth section"
+aloop --continue "Now explain the auth section"
 
 # Resume a specific session by ID
 aloop --resume a7b3c9d2e1f4 "What about the database config?"
 
 # Use a memorable name instead of auto-generated ID
-aloop -s refactor "Start refactoring the auth module"
+aloop --session refactor "Start refactoring the auth module"
 aloop --resume refactor "Continue where we left off"
 ```
 
@@ -84,7 +84,7 @@ aloop -p "List all Python files"
 Final result as a single JSON object to stdout. Nothing else printed.
 
 ```bash
-aloop -p -o json "What is 2+2?"
+aloop -p --output-format json "What is 2+2?"
 ```
 
 ```json
@@ -98,7 +98,7 @@ Good for: capturing results in scripts, piping to `jq`, integrating with other t
 NDJSON (newline-delimited JSON) events as they happen.
 
 ```bash
-aloop -p -o stream-json "List all files"
+aloop -p --output-format stream-json "List all files"
 ```
 
 ```json
@@ -225,13 +225,13 @@ When `--mode` is set:
 aloop -p "What does main.py do?"
 
 # Interactive refactoring session with a name
-aloop -s auth-refactor "Let's refactor the authentication module"
+aloop --session auth-refactor "Let's refactor the authentication module"
 
 # Pipe a file and get JSON output
-cat requirements.txt | aloop -p -o json "Are there any security vulnerabilities?"
+cat requirements.txt | aloop --output-format json "Are there any security vulnerabilities?"
 
 # Stream events for a custom UI
-aloop -p -o stream-json "Build a REST API for users" | while read line; do
+aloop -p --output-format stream-json "Build a REST API for users" | while read line; do
     echo "$line" | jq -r 'select(.type == "text") | .text' 2>/dev/null
 done
 
@@ -239,10 +239,10 @@ done
 aloop --provider anthropic --model claude-sonnet-4-20250514 "Explain this error"
 
 # Continue where you left off
-aloop -c "What was the next step?"
+aloop --continue "What was the next step?"
 
 # Headless automation
-ALOOP_MODEL=x-ai/grok-4.1-fast aloop -p -o json "Generate a migration script" > migration.json
+ALOOP_MODEL=x-ai/grok-4.1-fast aloop -p --output-format json "Generate a migration script" > migration.json
 
 # Debug project configuration
 aloop config show

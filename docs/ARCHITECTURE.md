@@ -8,7 +8,7 @@ aloop is an agent loop harness — it sends prompts to language models, executes
 ┌─────────────────────────────────────────────────────────────┐
 │                        aloop                                │
 │                                                             │
-│   System Prompt ──► Agent Loop ──► OpenRouter API           │
+│   System Prompt ──► Agent Loop ──► LLM Provider API         │
 │   (.aloop/config)       │          (any model)              │
 │                         │                                   │
 │                    ┌────▼────┐                              │
@@ -48,7 +48,7 @@ aloop is an agent loop harness — it sends prompts to language models, executes
    ├── gather_context → append to system prompt
    └── register_tools → extend tool set
 
-4. Send to OpenRouter
+4. Send to provider
    ├── Model selected by --model flag
    ├── Tools passed as separate API parameter (JSON schemas)
    └── Stream response (SSE)
@@ -149,8 +149,8 @@ The system prompt is designed for prefix caching (automatic on OpenRouter/Anthro
 
 ## Network
 
-- **API**: OpenRouter (`https://openrouter.ai/api/v1/chat/completions`)
-- **Auth**: `OPENROUTER_API_KEY` env var or `~/.aloop/credentials.json`
+- **API**: Provider-specific endpoint (e.g. `https://openrouter.ai/api/v1/chat/completions` for OpenRouter)
+- **Auth**: Provider-specific env var (e.g. `OPENROUTER_API_KEY`) or `~/.aloop/credentials.json`
 - **Retry**: 2 attempts with exponential backoff (1s, 2s), max 60s delay
 - **Retryable status codes**: 429, 502, 503, 504
 - **Timeouts**: Per-model (default 60s, configurable via `stream_timeout` on ModelConfig)

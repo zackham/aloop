@@ -23,8 +23,8 @@ acpx --model x-ai/grok-4.1-fast aloop "Refactor this function"
 
 # Named session for multi-turn
 acpx aloop sessions new --name backend
-acpx aloop -s backend "Read the API routes"
-acpx aloop -s backend "Now add error handling to the /users endpoint"
+acpx aloop --session backend "Read the API routes"
+acpx aloop --session backend "Now add error handling to the /users endpoint"
 
 # One-shot (no saved session)
 acpx aloop exec "What does this repo do?"
@@ -122,7 +122,7 @@ Editors with ACP support via plugins work the same way — they spawn `aloop ser
 `aloop serve` runs as an ACP server over stdio (JSON-RPC 2.0, NDJSON):
 
 ```
-Client (acpx/editor)              aloop --acp
+Client (acpx/editor)              aloop serve
     │                                  │
     │── initialize ──────────────────► │
     │◄── protocol_version, caps ────── │

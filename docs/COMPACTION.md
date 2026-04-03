@@ -181,7 +181,7 @@ Event(
 )
 ```
 
-In NDJSON streaming output (`-o stream-json`):
+In NDJSON streaming output (`--output-format stream-json`):
 
 ```json
 {"type": "compaction", "messages_before": 47, "messages_after": 12, "tokens_saved": 35000}

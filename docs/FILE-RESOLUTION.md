@@ -12,7 +12,7 @@ ALOOP.md → AGENTS.md → .agents/AGENTS.md → CLAUDE.md → .claude/CLAUDE.md
 
 | File | When to use |
 |------|-------------|
-| `ALOOP.md` | aloop-specific context — use when you control the full system prompt (template mode) and need different instructions than what other tools see |
+| `ALOOP.md` | aloop-specific context — use when you override the system prompt and need different instructions than what other tools see |
 | `AGENTS.md` | Cross-tool convention (Codex, OpenCode, etc.) |
 | `.agents/AGENTS.md` | Same convention, tucked into a dotdir |
 | `CLAUDE.md` | Claude Code convention |
@@ -22,9 +22,9 @@ ALOOP.md → AGENTS.md → .agents/AGENTS.md → CLAUDE.md → .claude/CLAUDE.md
 
 ### Why ALOOP.md exists
 
-When you use template mode (full system prompt control), your project context is different from what you'd put in `AGENTS.md`. Your template already has behavioral instructions — the instruction file just needs project-specific facts. `ALOOP.md` lets you maintain a lean aloop-specific file alongside the standard `AGENTS.md` that other tools use.
+When you override the system prompt (via template mode, `--system-prompt`, or the Python API), your project context is different from what you'd put in `AGENTS.md`. Your template already has behavioral instructions — the instruction file just needs project-specific facts. `ALOOP.md` lets you maintain a lean aloop-specific file alongside the standard `AGENTS.md` that other tools use.
 
-If you don't need this distinction, just use `AGENTS.md` — it works everywhere.
+If you don't need this distinction, skip `ALOOP.md` — aloop will pick up your existing `AGENTS.md` or `CLAUDE.md` automatically.
 
 ### Where it goes in the prompt
 
@@ -161,7 +161,7 @@ These live exclusively in `~/.aloop/` and are never project-scoped:
 | `providers.json` | Custom provider definitions |
 | `models.json` | Model aliases with cost metadata |
 | `sessions/` | Persisted session conversation history |
-| `state.json` | Last session ID for `-c` flag |
+| `state.json` | Last session ID for `--continue` flag |
 
 ## Debugging
 

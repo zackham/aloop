@@ -85,7 +85,7 @@ aloop --mode review "check the auth module"
 
 ### Sessions with automatic compaction
 
-Persistent sessions with context summarization, file restoration, and circuit breaker. Resume with `-c` or `--resume ID`.
+Persistent sessions with context summarization, file restoration, and circuit breaker. Resume with `--continue` or `--resume ID`.
 
 ### ACP server
 

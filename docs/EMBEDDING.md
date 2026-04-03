@@ -116,6 +116,8 @@ except ModeConflictError as e:
     print(e)  # "Session 's1' was created with mode 'review', cannot switch to 'code'."
 ```
 
+See [Config](CONFIG.md) for full mode configuration reference.
+
 ### run()
 
 Convenience wrapper. Consumes the stream and returns the final result.

@@ -1,7 +1,7 @@
 """ACP (Agent Client Protocol) server for aloop.
 
 Wraps ALoop as an ACP agent, translating InferenceEvents
-to ACP session notifications. Run via `aloop --acp`.
+to ACP session notifications. Run via `aloop serve`.
 """
 
 from __future__ import annotations
@@ -515,7 +515,7 @@ def _tool_kind(name: str) -> str:
 async def serve_acp(model: str | None = None) -> None:
     """Run aloop as an ACP server over stdio.
 
-    This is the main entry point called by `aloop --acp`.
+    This is the main entry point called by `aloop serve`.
     Blocks until the client disconnects.
     """
     agent = AloopAgent(model=model)
