@@ -28,7 +28,8 @@ aloop "What files are in this directory?"
 |---|---|---|---|---|---|
 | Embeddable as a library | No | No | No | Yes (heavy) | **Yes (lightweight)** |
 | Provider-agnostic | No | No | Partial | Yes | **Yes — 5 tested providers** |
-| Custom tools without forking | No | No | No | Framework abstractions | **Project-local hooks** |
+| Custom tools | MCP servers | Experimental hooks | No | Framework abstractions | **Project-local hooks** |
+| Full system prompt control | No | No | No | Yes | **Yes — [published defaults](docs/SYSTEM-PROMPT.md)** |
 | ACP interop (editors, orchestrators) | Native | Via adapter | No | No | **Built-in** |
 | Opinionated about your workflow | Very | Very | Very | Very | **Minimal** |
 
