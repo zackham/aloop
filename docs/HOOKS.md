@@ -54,7 +54,6 @@ For `before_tool`, the first hook that returns `{"allow": False}` stops executio
 | Key | Description |
 |-----|-------------|
 | `session_key` | Session ID (if persistent session) |
-| `session_key` | Session ID (if persistent session) |
 | `topic_id` | External topic ID (if provided) |
 | `chat_id` | External chat ID (if provided) |
 | `_capability_token` | Permission token (if provided by caller) |

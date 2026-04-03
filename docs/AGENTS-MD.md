@@ -19,7 +19,9 @@ aloop checks for project instructions in this order:
 3. `CLAUDE.md` (project root)
 4. `.claude/CLAUDE.md`
 
-The first file found is loaded into the system prompt under `# Project Context` (in section mode) or via the `{{agents_md}}` variable (in template mode).
+The first file found is loaded into the system prompt under `# Project Context` (in section mode).
+
+In template mode, the `{{agents_md}}` variable checks a slightly different order: `ALOOP.md`, `AGENTS.md`, `CLAUDE.md` — this lets projects have a separate operational context file for the aloop harness while keeping `AGENTS.md` as the cross-tool standard.
 
 ## What to Put In It
 
