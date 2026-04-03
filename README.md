@@ -1,3 +1,7 @@
+# Why
+
+![claude.ai uptime over the past 90 days](claude_uptime.jpg)
+
 # aloop
 
 An embeddable agent loop for integrating LLM agents into your software projects.
