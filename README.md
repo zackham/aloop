@@ -24,16 +24,16 @@ aloop "What files are in this directory?"
 
 ## Why aloop?
 
-|  | Claude Code | Codex CLI | Aider | LangChain | **aloop** |
+|  | **aloop** | Claude Agent SDK | OpenAI Agents SDK | Pydantic AI | Google ADK |
 |---|---|---|---|---|---|
-| Embeddable as a library | No | No | No | Yes (heavy) | **Yes (lightweight)** |
-| Provider-agnostic | No | No | Partial | Yes | **Yes — 5 tested providers** |
-| Custom tools | MCP servers | Experimental hooks | No | Framework abstractions | **Project-local hooks** |
-| Full system prompt control | No | No | No | Yes | **Yes — [published defaults](docs/SYSTEM-PROMPT.md)** |
-| ACP interop (editors, orchestrators) | Native | Via adapter | No | No | **Built-in** |
-| Opinionated about your workflow | Very | Very | Very | Very | **Minimal** |
+| Provider-agnostic | **Yes — 5 tested** | Anthropic only | OpenAI-native (adapters for others) | Yes — many native | Google-optimized |
+| Embeddable | **Python, async** | Python + TS | Python (TS via subprocess) | Python | Python |
+| Custom tools | **Project-local hooks** | MCP + plugins + hooks | Functions + MCP | Decorators + MCP | Functions + MCP + OpenAPI |
+| System prompt control | **Full — [published defaults](docs/SYSTEM-PROMPT.md)** | Replaceable in SDK | Append via AGENTS.md | Full | Full |
+| ACP (editor/orchestrator interop) | **Built-in** | Via community adapter | Via community adapter | No | No (has A2A) |
+| Weight | **~2500 LOC, 1 dep** | Full product runtime | Multi-agent framework | Type-safe framework | Google ecosystem toolkit |
 
-aloop is to agent loops what Flask is to web frameworks: small, embeddable, and extensible through your project — not the library.
+aloop is to agent loops what Flask is to web frameworks: small, embeddable, and extensible through your project — not the library. The others bring more features but also more opinions, more dependencies, and more lock-in.
 
 ### Who is this for?
 
