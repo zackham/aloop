@@ -2,6 +2,10 @@
 
 A provider-agnostic, embeddable agent loop. Use any LLM from any provider, extend through hooks, embed as a Python library or expose as an ACP server. No vendor lock-in, no framework opinions.
 
+[Install](#install) · [System Prompt](docs/SYSTEM-PROMPT.md) · [Hooks](docs/HOOKS.md) · [Config](docs/CONFIG.md) · [AGENTS.md](docs/AGENTS-MD.md) · [Architecture](docs/ARCHITECTURE.md) · [Changelog](CHANGELOG.md)
+
+---
+
 ```python
 from aloop import AgentLoopBackend, EventType
 
@@ -17,8 +21,6 @@ Or from the command line:
 ```bash
 aloop "What files are in this directory?"
 ```
-
-**[Quick Start](#install)** · **[Docs](docs/)** · **[System Prompt](docs/SYSTEM-PROMPT.md)** · **[Hooks](docs/HOOKS.md)** · **[Config](docs/CONFIG.md)** · **[Architecture](docs/ARCHITECTURE.md)** · **[Changelog](CHANGELOG.md)**
 
 ## Why aloop?
 
