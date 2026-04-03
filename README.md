@@ -18,7 +18,7 @@ Or from the command line:
 aloop "What files are in this directory?"
 ```
 
-**[Quick Start](#install)** · **[Docs](docs/)** · **[Hooks](docs/HOOKS.md)** · **[Config](docs/CONFIG.md)** · **[Architecture](docs/ARCHITECTURE.md)** · **[Changelog](CHANGELOG.md)**
+**[Quick Start](#install)** · **[Docs](docs/)** · **[System Prompt](docs/SYSTEM-PROMPT.md)** · **[Hooks](docs/HOOKS.md)** · **[Config](docs/CONFIG.md)** · **[Architecture](docs/ARCHITECTURE.md)** · **[Changelog](CHANGELOG.md)**
 
 ## Why aloop?
 
@@ -98,6 +98,16 @@ steps:
     prompt: "Implement feature X"
 ```
 
+### Full system prompt control
+
+No hidden instructions. Two modes: write your own prompt from scratch (template mode with `{{tools}}`, `{{skills}}`, `{{agents_md}}` variables), or override individual sections of the defaults. Inspect exactly what the model sees at any time:
+
+```bash
+aloop system-prompt --rendered
+```
+
+The full default prompt is published in [docs/SYSTEM-PROMPT.md](docs/SYSTEM-PROMPT.md) — nothing is hidden.
+
 ### Built-in tools
 
 `read_file`, `write_file`, `edit_file`, `bash`, `load_skill` — all with no access restrictions by default. Projects add controls via `before_tool` hooks.
@@ -151,8 +161,9 @@ See `aloop --help` for all options, or `aloop list-providers` / `aloop validate-
 
 aloop discovers project configuration from the current working directory. See the dedicated docs for details:
 
+- **[System Prompt](docs/SYSTEM-PROMPT.md)** — full prompt transparency, template mode, section overrides, context injection
 - **[AGENTS.md convention](docs/AGENTS-MD.md)** — project-specific instructions for the agent
-- **[Configuration](docs/CONFIG.md)** — `.aloop/config.json` schema, system prompt modes, model aliases, compaction tuning
+- **[Configuration](docs/CONFIG.md)** — `.aloop/config.json` schema, model aliases, compaction tuning
 - **[Hooks](docs/HOOKS.md)** — extension points, `@hook` decorator, examples
 - **[Architecture](docs/ARCHITECTURE.md)** — data flow, compaction internals, module map
 
