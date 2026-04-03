@@ -2,7 +2,23 @@
 
 A provider-agnostic, embeddable agent loop. Use any LLM from any provider, extend through hooks, embed as a Python library, drive from the CLI, or expose as an ACP server.
 
-[Embedding](docs/EMBEDDING.md) · [CLI](docs/CLI.md) · [ACP](docs/ACP.md) · [Hooks](docs/HOOKS.md) · [System Prompt](docs/SYSTEM-PROMPT.md) · [Config](docs/CONFIG.md) · [Architecture](docs/ARCHITECTURE.md)
+### Documentation
+
+**Usage**
+- [Embedding Guide](docs/EMBEDDING.md) — Python API, `ALoop`, `stream()`, events, tools, sessions
+- [CLI Reference](docs/CLI.md) — subcommands, flags, output formats, scripting
+- [ACP Integration](docs/ACP.md) — acpx, Stepwise, editors, protocol details
+
+**Configuration**
+- [System Prompt](docs/SYSTEM-PROMPT.md) — full prompt transparency, template mode, section overrides
+- [Hooks](docs/HOOKS.md) — 10 hook points, `@tool` decorator, `ToolRejected`, execution order
+- [Config](docs/CONFIG.md) — JSONC config, modes, global/project layering
+- [AGENTS.md](docs/AGENTS-MD.md) — project instruction file convention
+
+**Internals**
+- [Compaction](docs/COMPACTION.md) — context summarization, file restoration, circuit breaker
+- [File Resolution](docs/FILE-RESOLUTION.md) — discovery chains, global/project layering, merge rules
+- [Architecture](docs/ARCHITECTURE.md) — data flow, module map, event protocol
 
 ---
 
@@ -65,7 +81,7 @@ async def query_db(
     return str(await db.execute(sql))
 ```
 
-See [docs/HOOKS.md](docs/HOOKS.md).
+See [Hooks](docs/HOOKS.md).
 
 ### Full system prompt control
 
@@ -85,11 +101,11 @@ aloop --mode review "check the auth module"
 
 ### Sessions with automatic compaction
 
-Persistent sessions with context summarization, file restoration, and circuit breaker. Resume with `--continue` or `--resume ID`.
+Persistent sessions with context summarization, file restoration, and circuit breaker. Resume with `--continue` or `--resume ID`. See [Compaction](docs/COMPACTION.md).
 
 ### ACP server
 
-`aloop serve` speaks [ACP](https://agentclientprotocol.com) over stdio — works with acpx, Zed, JetBrains, Neovim, Stepwise.
+`aloop serve` speaks [ACP](https://agentclientprotocol.com) over stdio — works with acpx, Zed, JetBrains, Neovim, Stepwise. See [ACP](docs/ACP.md).
 
 ```bash
 aloop register-acpx && acpx aloop "refactor the auth module"
@@ -109,17 +125,6 @@ export OPENROUTER_API_KEY="sk-or-..."
 ```
 
 Or just run `aloop` — it prompts for your key on first use. Run `aloop init` to scaffold project config.
-
-## Documentation
-
-**Usage:**
-[Embedding](docs/EMBEDDING.md) · [CLI](docs/CLI.md) · [ACP](docs/ACP.md)
-
-**Configuration:**
-[System Prompt](docs/SYSTEM-PROMPT.md) · [Hooks](docs/HOOKS.md) · [Config](docs/CONFIG.md) · [AGENTS.md](docs/AGENTS-MD.md)
-
-**Internals:**
-[Compaction](docs/COMPACTION.md) · [File Resolution](docs/FILE-RESOLUTION.md) · [Architecture](docs/ARCHITECTURE.md)
 
 ## License
 
