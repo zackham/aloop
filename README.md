@@ -2,6 +2,23 @@
 
 A provider-agnostic, embeddable agent loop. Use any LLM from any provider, extend through hooks, embed as a Python library, drive from the CLI, or expose as an ACP server.
 
+## Install
+
+```bash
+uv tool install git+https://github.com/zackham/aloop.git
+```
+
+Requires Python 3.12+ and an API key:
+
+```bash
+export ALOOP_MODEL="x-ai/grok-4.1-fast"
+export OPENROUTER_API_KEY="sk-or-..."
+```
+
+Or just run `aloop` — it prompts for your key on first use. Run `aloop init` to scaffold project config.
+
+## Documentation
+
 **Usage**
 - [CLI Reference](docs/CLI.md) — subcommands, flags, output formats, scripting
 - [ACP Integration](docs/ACP.md) — acpx, Stepwise, editors, protocol details
@@ -17,8 +34,6 @@ A provider-agnostic, embeddable agent loop. Use any LLM from any provider, exten
 - [Architecture](docs/ARCHITECTURE.md) — data flow, module map, event protocol
 - [File Resolution](docs/FILE-RESOLUTION.md) — discovery chains, global/project layering, merge rules
 - [Compaction](docs/COMPACTION.md) — context summarization, file restoration, circuit breaker
-
----
 
 ## Why aloop?
 
@@ -94,21 +109,6 @@ Persistent sessions with context summarization, file restoration, and circuit br
 ```bash
 aloop register-acpx && acpx aloop "refactor the auth module"
 ```
-
-## Install
-
-```bash
-uv tool install git+https://github.com/zackham/aloop.git
-```
-
-Requires Python 3.12+ and an API key:
-
-```bash
-export ALOOP_MODEL="x-ai/grok-4.1-fast"
-export OPENROUTER_API_KEY="sk-or-..."
-```
-
-Or just run `aloop` — it prompts for your key on first use. Run `aloop init` to scaffold project config.
 
 ## License
 
