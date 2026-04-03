@@ -159,6 +159,7 @@ The system prompt is designed for prefix caching (automatic on OpenRouter/Anthro
 | `hooks.py` | Hook discovery and execution | — (loads .aloop/hooks/ dynamically) |
 | `compaction.py` | Context summarization, file restoration | models |
 | `session.py` | Persistent session management | compaction |
+| `providers.py` | Provider registry (OpenRouter, OpenAI, Ollama, etc.) | — |
 | `models.py` | Model registry with cost tracking | — |
 | `types.py` | Event types, result types | — |
 | `tools_base.py` | ToolDef, ToolResult base classes | — |

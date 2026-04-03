@@ -4,7 +4,7 @@ An embeddable agent loop for integrating LLM agents into your software projects.
 
 aloop is a Python agent harness designed to be embedded in applications, pipelines, and orchestration systems. It provides a core agent loop with built-in tools (file I/O, shell, skills), persistent sessions with context compaction, a hook system for project-specific extensions, and an [ACP](https://agentclientprotocol.com) server for interop with editors and orchestrators. Use it as a library via the Python API, drive it from the CLI, or connect it to any ACP-compatible client.
 
-The harness is model-agnostic and project-independent. Projects define their identity via `AGENTS.md` files and configure behavior via `.aloop/config.json` and hooks. Currently supports [OpenRouter](https://openrouter.ai) (any model on the platform); direct provider support (OpenAI, Anthropic, local models) is planned.
+The harness is model-agnostic and project-independent. Projects define their identity via `AGENTS.md` files and configure behavior via `.aloop/config.json` and hooks. Ships with a provider registry supporting [OpenRouter](https://openrouter.ai), OpenAI, Anthropic, Google (Gemini), and Groq (all tested), plus Together AI and Ollama (community). Custom providers can be added via config.
 
 ## Install
 
@@ -22,6 +22,15 @@ Requires Python 3.12+ and an [OpenRouter API key](https://openrouter.ai/keys):
 
 ```bash
 export OPENROUTER_API_KEY="sk-or-..."
+export ALOOP_MODEL="x-ai/grok-4.1-fast"  # or any OpenRouter model ID
+```
+
+Or just run `aloop` — it will prompt you to paste your API key on first use.
+
+For ACP integration (editors, acpx, Stepwise), also run:
+
+```bash
+aloop register-acpx
 ```
 
 ## Quick Start
@@ -110,11 +119,72 @@ Each turn: the model responds with text and/or tool calls. Tool results are fed 
 - See [docs/HOOKS.md](docs/HOOKS.md)
 
 **Sessions & Compaction**
-- Persistent sessions via `--session` flag
+- Auto-created persistent sessions (resume with `-c` or `--resume ID`)
+- Named sessions via `-s name` for memorable IDs
 - Auto-compaction when context approaches model limits
 - Post-compaction file restoration (re-reads recently accessed files)
-- Configurable thresholds
-- Stale session auto-clearing
+- Stale session auto-clearing (4h / 100 messages)
+
+**ACP & Integration**
+- Built-in [ACP](https://agentclientprotocol.com) server (`aloop --acp`) for editor and orchestrator integration
+- Works with any ACP client: [acpx](https://github.com/openclaw/acpx), Zed, JetBrains, Neovim
+- Use as a step executor in [Stepwise](https://github.com/zackham/stepwise) flows
+- Register with acpx in one command: `aloop register-acpx`
+
+## Integration
+
+### acpx / Stepwise
+
+Register aloop as an ACP agent:
+
+```bash
+aloop register-acpx
+```
+
+Then use it from [acpx](https://github.com/openclaw/acpx) directly:
+
+```bash
+# Model via --model flag
+acpx --model x-ai/grok-4.1-fast aloop "refactor the auth module"
+
+# Or set a default
+export ALOOP_MODEL="x-ai/grok-4.1-fast"
+acpx aloop "refactor the auth module"
+```
+
+As a step executor in [Stepwise](https://github.com/zackham/stepwise) flows:
+
+```yaml
+steps:
+  implement:
+    executor: agent
+    agent: aloop
+    working_dir: ~/work/my-project
+    prompt: "Implement feature X based on the spec"
+    output_mode: stream_result
+    permissions: approve_all
+```
+
+Set `ALOOP_MODEL` in the environment where Stepwise runs — it propagates to agent subprocesses automatically.
+
+### Python API
+
+```python
+from aloop import AgentLoopBackend, EventType
+
+backend = AgentLoopBackend(model="x-ai/grok-4.1-fast", api_key="sk-or-...")
+
+# Streaming
+async for event in backend.stream("Read README.md and summarize it"):
+    if event.type == EventType.TEXT_DELTA:
+        print(event.data["text"], end="")
+    elif event.type == EventType.COMPLETE:
+        print(f"\nCost: ${event.data['cost_usd']:.4f}")
+
+# One-shot
+result = await backend.run("What is 2+2?")
+print(result.text)
+```
 
 ## Project Setup
 
@@ -195,7 +265,7 @@ See [docs/CONFIG.md](docs/CONFIG.md) for full schema reference.
 | `read_file` | Read file contents | `path`, `offset`, `limit` |
 | `write_file` | Create or overwrite a file | `path`, `content` |
 | `edit_file` | Find & replace text | `path`, `old_string`, `new_string` |
-| `bash` | Execute a shell command | `command`, `timeout` (max 300s) |
+| `bash` | Execute a shell command | `command`, `timeout` |
 | `load_skill` | Load a skill's SKILL.md | `skill`, `args` |
 
 File tools resolve paths relative to the project root. No restrictions by default — projects can add access controls via `before_tool` hooks.
@@ -224,19 +294,47 @@ def block_dangerous(name: str, args: dict, **ctx) -> dict:
 
 Lower priority numbers run first. All hooks are optional — the harness works without any. See [docs/HOOKS.md](docs/HOOKS.md).
 
-## Models
+## Providers & Models
 
-Any [OpenRouter model ID](https://openrouter.ai/models) works directly:
+aloop ships with a registry of API providers. OpenRouter is the default (any model on the platform). Switch providers with `--provider`:
 
 ```bash
+# OpenRouter (default) — any model ID
 aloop --model x-ai/grok-4.1-fast "summarize this file"
-aloop --model anthropic/claude-sonnet-4-20250514 "refactor this function"
-aloop --model google/gemini-2.5-flash-preview "explain this codebase"
+
+# Direct OpenAI
+aloop --provider openai --model gpt-4o "refactor this function"
+
+# Local Ollama (no key needed)
+aloop --provider ollama --model llama3 "explain this codebase"
 ```
 
-Set a default via environment variable: `export ALOOP_MODEL="x-ai/grok-4.1-fast"`
+See all providers: `aloop list-providers`
+Test a provider: `aloop validate-provider --provider openai --model gpt-4o-mini`
 
-For short aliases with cost tracking metadata, add entries to `~/.aloop/models.json`.
+Set defaults via environment or config:
+
+```bash
+export ALOOP_MODEL="x-ai/grok-4.1-fast"
+```
+
+Or in `~/.aloop/config.json`:
+
+```json
+{"provider": "openai"}
+```
+
+Add custom providers via `~/.aloop/providers.json`:
+
+```json
+{
+  "my-corp": {
+    "name": "Internal LLM",
+    "base_url": "https://llm.internal.corp/v1/chat/completions",
+    "env_key": "CORP_LLM_KEY"
+  }
+}
+```
 
 ## System Prompt
 
@@ -259,7 +357,8 @@ aloop system-prompt --rendered     # show with variables interpolated
 aloop [PROMPT] [OPTIONS]
 
 Options:
-  --model, -m MODEL          OpenRouter model ID or alias (or set ALOOP_MODEL)
+  --model, -m MODEL          Model ID (or set ALOOP_MODEL)
+  --provider NAME            API provider (default: openrouter)
   -p                         One-shot: print response and exit (no REPL)
   -c, --continue             Continue last session
   --resume SESSION_ID        Resume a specific session by ID
@@ -273,9 +372,12 @@ Options:
   --list-models              List registered model aliases
 
 Subcommands:
-  aloop system-prompt        Show the system prompt template
-  aloop system-prompt --rendered   Show fully interpolated prompt
-  aloop update               Self-update to latest version
+  aloop list-providers           List available API providers
+  aloop validate-provider        Test a provider's API compatibility
+  aloop system-prompt            Show the system prompt template
+  aloop system-prompt --rendered Show fully interpolated prompt
+  aloop update                   Self-update to latest version
+  aloop register-acpx            Register aloop with acpx for ACP integration
 ```
 
 Sessions are auto-created on every invocation. The session ID is printed when exiting the REPL or with `-p` mode. Use `-s name` to give a session a memorable name (e.g. `aloop -s refactor`), `--resume ID` to return to a specific session, or `-c` to continue the most recent one.
@@ -291,7 +393,8 @@ src/aloop/
   hooks.py             Hook discovery and execution
   compaction.py        Context compaction with circuit breaker
   session.py           Persistent session management
-  models.py            Model registry with cost tracking
+  providers.py         Provider registry (OpenRouter, OpenAI, Ollama, etc.)
+  models.py            Model alias registry with cost tracking
   types.py             Event types and streaming protocol
   tools_base.py        ToolDef, ToolResult base classes
   backend.py           InferenceBackend protocol
@@ -301,25 +404,6 @@ src/aloop/
     files.py           read_file, write_file, edit_file
     shell.py           bash tool
     skills.py          load_skill tool + skill discovery
-```
-
-## Python API
-
-```python
-from aloop import AgentLoopBackend, EventType
-
-backend = AgentLoopBackend(model="x-ai/grok-4.1-fast", api_key="sk-or-...")
-
-# Streaming
-async for event in backend.stream("Read README.md and summarize it"):
-    if event.type == EventType.TEXT_DELTA:
-        print(event.data["text"], end="")
-    elif event.type == EventType.COMPLETE:
-        print(f"\nCost: ${event.data['cost_usd']:.4f}")
-
-# One-shot
-result = await backend.run("What is 2+2?")
-print(result.text)
 ```
 
 ## Contributing

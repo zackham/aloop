@@ -8,7 +8,7 @@ aloop's hook system lets projects extend the agent loop without modifying harnes
 |-------|-------------|-----------|---------|
 | `before_tool` | Before each tool execution | `(name, args, **ctx)` | `{"allow": bool, "reason": str, "modified_args": dict}` |
 | `after_tool` | After each tool execution | `(name, args, result, **ctx)` | `{"modified_result": str}` |
-| `gather_context` | When building the system prompt | `(task_type, **kwargs)` | `str` |
+| `gather_context` | When building the system prompt | `(**kwargs)` | `str` |
 | `register_tools` | On initialization | `()` | `list[ToolDef]` |
 
 All hooks are optional. The harness works without any hooks configured.
@@ -53,7 +53,7 @@ For `before_tool`, the first hook that returns `{"allow": False}` stops executio
 
 | Key | Description |
 |-----|-------------|
-| `task_type` | Current task type (if set) |
+| `session_key` | Session ID (if persistent session) |
 | `session_key` | Session ID (if persistent session) |
 | `topic_id` | External topic ID (if provided) |
 | `chat_id` | External chat ID (if provided) |
@@ -68,10 +68,10 @@ Runs before every tool call. Can block execution or modify arguments.
 ```python
 @hook("before_tool", priority=10)
 def require_approval(name: str, args: dict, **ctx) -> dict:
-    # Block external-facing tools unless task_type allows them
-    external_tools = {"send_message", "external_email"}
-    if name in external_tools and ctx.get("task_type") != "outreach":
-        return {"allow": False, "reason": f"Tool '{name}' requires outreach task type"}
+    # Block destructive tools in certain contexts
+    dangerous = {"write_file", "edit_file"}
+    if name in dangerous and "production" in args.get("path", ""):
+        return {"allow": False, "reason": f"Tool '{name}' blocked for production paths"}
     return {"allow": True}
 ```
 
@@ -99,7 +99,7 @@ Runs when building the system prompt. Returns a string to append as context.
 
 ```python
 @hook("gather_context")
-def inject_daily_notes(task_type: str, **kwargs) -> str:
+def inject_daily_notes(**kwargs) -> str:
     from pathlib import Path
     notes = Path("notes.md")
     if notes.exists():

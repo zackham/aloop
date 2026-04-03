@@ -1,4 +1,4 @@
-"""Agent loop backend - model-agnostic via OpenRouter."""
+"""Agent loop backend — model-agnostic, multi-provider."""
 
 from __future__ import annotations
 
@@ -22,13 +22,13 @@ from .compaction import (
     should_compact,
 )
 from .models import ModelConfig, get_model
+from .providers import ProviderConfig, get_provider, get_default_provider_name
 from .session import AgentSession
 from .hooks import run_before_tool, run_register_tools
 from .tools import ANALYSIS_TOOLS
 from .tools_base import ToolDef, ToolResult
 from .types import EventType, InferenceError, InferenceEvent, InferenceResult
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MAX_RETRIES = 2
 RETRY_DELAY = 1.0
 RETRYABLE_CODES = {429, 502, 503, 504}
@@ -43,6 +43,7 @@ class AgentLoopBackend:
         self,
         model: str | ModelConfig,
         api_key: str | None = None,
+        provider: str | ProviderConfig | None = None,
         max_iterations: int = 50,
         max_retry_delay: float = 60.0,
         compaction_settings: CompactionSettings | None = None,
@@ -50,7 +51,21 @@ class AgentLoopBackend:
         max_session_messages: int = 100,
     ):
         self.model_config = get_model(model) if isinstance(model, str) else model
-        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
+
+        # Resolve provider
+        if isinstance(provider, ProviderConfig):
+            self.provider = provider
+        elif isinstance(provider, str):
+            self.provider = get_provider(provider)
+        else:
+            self.provider = get_provider(get_default_provider_name())
+
+        # Resolve API key: explicit > provider-specific env var > generic
+        self.api_key = (
+            api_key
+            or (os.environ.get(self.provider.env_key, "") if self.provider.env_key else "")
+            or os.environ.get("ALOOP_API_KEY", "")
+        )
         self.max_iterations = max_iterations
         self.max_retry_delay = max_retry_delay
         self.max_session_age = max_session_age
@@ -431,18 +446,15 @@ class AgentLoopBackend:
             "stream": False,
         }
 
-        if model.provider_order:
+        if self.provider.supports_provider_routing and model.provider_order:
             payload["provider"] = {"order": list(model.provider_order)}
 
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "HTTP-Referer": "https://github.com/zackham/aloop",
-            "X-Title": "aloop",
-        }
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        headers.update(self.provider.extra_headers)
 
         timeout = httpx.Timeout(timeout=120.0, connect=30.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(OPENROUTER_URL, json=payload, headers=headers)
+            response = await client.post(self.provider.base_url, json=payload, headers=headers)
             response.raise_for_status()
             data = response.json()
 
@@ -556,14 +568,11 @@ class AgentLoopBackend:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        if self.model_config.provider_order:
+        if self.provider.supports_provider_routing and self.model_config.provider_order:
             payload["provider"] = {"order": list(self.model_config.provider_order)}
 
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "HTTP-Referer": "https://github.com/zackham/aloop",
-            "X-Title": "aloop",
-        }
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        headers.update(self.provider.extra_headers)
 
         for attempt in range(MAX_RETRIES + 1):
             try:
@@ -571,7 +580,7 @@ class AgentLoopBackend:
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     async with client.stream(
                         "POST",
-                        OPENROUTER_URL,
+                        self.provider.base_url,
                         json=payload,
                         headers=headers,
                     ) as response:

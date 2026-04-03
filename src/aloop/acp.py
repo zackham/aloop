@@ -163,13 +163,12 @@ class AloopAgent:
         mcp_servers: Any | None = None,
         **kwargs: Any,
     ) -> LoadSessionResponse | None:
-        # Try to restore from existing aloop session
-        existing = AgentSession.load(session_id=session_id)
-        if existing is None:
-            return None
-
+        # Restore existing session or create fresh — acpx expects load to
+        # always succeed so the session is available for subsequent prompts.
         state = self._create_session_state(session_id, cwd)
-        state.agent_session = existing
+        existing = AgentSession.load(session_id=session_id)
+        if existing is not None:
+            state.agent_session = existing
         self._sessions[session_id] = state
         return LoadSessionResponse()
 
@@ -265,6 +264,17 @@ class AloopAgent:
         return None
 
     async def set_session_model(self, model_id: str, session_id: str, **kwargs: Any) -> None:
+        """Change the model for an active session."""
+        state = self._sessions.get(session_id)
+        if state is None:
+            return None
+        # Rebuild backend with the new model
+        api_key = _resolve_api_key()
+        state.backend = AgentLoopBackend(
+            model=model_id,
+            api_key=api_key,
+            compaction_settings=get_compaction_settings(),
+        )
         return None
 
     async def set_config_option(self, config_id: str, session_id: str, value: str | bool, **kwargs: Any) -> None:

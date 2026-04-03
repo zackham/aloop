@@ -19,7 +19,7 @@ bash_tool = ToolDef(
         "type": "object",
         "properties": {
             "command": {"type": "string", "description": "Shell command"},
-            "timeout": {"type": "integer", "description": "Timeout seconds (max 300)", "default": 120},
+            "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 300},
         },
         "required": ["command"],
     },
@@ -27,8 +27,8 @@ bash_tool = ToolDef(
 )
 
 
-async def _bash(command: str, timeout: int = 120) -> ToolResult:
-    timeout = max(1, min(int(timeout), 300))
+async def _bash(command: str, timeout: int = 300) -> ToolResult:
+    timeout = max(1, int(timeout))
     proc = None
     try:
         proc = await asyncio.create_subprocess_shell(

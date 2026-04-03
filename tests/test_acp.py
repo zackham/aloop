@@ -46,7 +46,8 @@ async def test_initialize_returns_agent_info(agent):
     resp = await agent.initialize(protocol_version=1)
     assert resp.agent_info is not None
     assert resp.agent_info.name == "aloop"
-    assert resp.agent_info.version == "0.1.0"
+    from aloop import __version__
+    assert resp.agent_info.version == __version__
 
 
 @pytest.mark.asyncio
@@ -97,9 +98,11 @@ async def test_multiple_sessions(agent, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_load_nonexistent_session_returns_none(agent, tmp_path):
+async def test_load_nonexistent_session_creates_fresh(agent, tmp_path):
+    """load_session always succeeds — creates fresh session if not found on disk."""
     resp = await agent.load_session(cwd=str(tmp_path), session_id="nonexistent-id")
-    assert resp is None
+    assert resp is not None
+    assert "nonexistent-id" in agent._sessions
 
 
 # ── Cancel ─────────────────────────────────────────────────────────────

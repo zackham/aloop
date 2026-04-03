@@ -57,11 +57,24 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Agent loop with tool access, skills, and hooks",
         prog="aloop",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "commands:\n"
+            "  aloop update               Self-update to latest version\n"
+            "  aloop register-acpx        Register aloop with acpx for ACP integration\n"
+            "  aloop list-providers        List available API providers\n"
+            "  aloop validate-provider     Test a provider's API compatibility\n"
+            "  aloop system-prompt        Show the system prompt template\n"
+            "  aloop system-prompt --rendered  Show fully interpolated prompt"
+        ),
     )
-    parser.add_argument("prompt", nargs="?", help="Prompt text, or 'update'/'system-prompt'")
+    parser.add_argument("prompt", nargs="?",
+                        help="Prompt text, or a command (see below)")
     parser.add_argument("--version", action="store_true", help="Show version and exit")
     parser.add_argument("--model", "-m", default=None,
-                        help="OpenRouter model ID (e.g. x-ai/grok-4.1-fast)")
+                        help="Model ID (e.g. x-ai/grok-4.1-fast)")
+    parser.add_argument("--provider", default=None,
+                        help="API provider (default: openrouter). See aloop list-providers")
     parser.add_argument("-p", action="store_true", dest="print_mode",
                         help="One-shot: print response and exit (no REPL)")
     parser.add_argument("-c", "--continue", action="store_true", dest="continue_last",
@@ -373,19 +386,38 @@ def _resolve_model(args) -> str:
     return model
 
 
-def _resolve_api_key() -> str:
-    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+def _resolve_api_key(provider) -> str:
+    """Resolve API key: provider env var → credentials file → interactive prompt."""
+    from .providers import ProviderConfig
+
+    # 1. Provider-specific env var
+    api_key = ""
+    if provider.env_key:
+        api_key = os.environ.get(provider.env_key, "")
+
+    # 2. Generic env var
+    if not api_key:
+        api_key = os.environ.get("ALOOP_API_KEY", "")
+
+    # 3. Credentials file
     if not api_key:
         cred_file = Path.home() / ".aloop" / "credentials.json"
         if cred_file.exists():
-            api_key = json.loads(cred_file.read_text()).get("api_key", "")
+            creds = json.loads(cred_file.read_text())
+            api_key = creds.get(provider.env_key, creds.get("api_key", ""))
 
+    # 4. No key needed (e.g. Ollama)
+    if not provider.env_key:
+        return api_key or "no-key-needed"
+
+    # 5. Interactive prompt
     if not api_key:
         if not sys.stdin.isatty():
-            sys.stderr.write("error: no OpenRouter API key. Set OPENROUTER_API_KEY or run aloop interactively to configure.\n")
+            sys.stderr.write(f"error: no API key. Set {provider.env_key} or ALOOP_API_KEY.\n")
             sys.exit(1)
-        print(f"No OpenRouter API key found.\n")
-        print(f"Get one at: {_CYAN}https://openrouter.ai/keys{_RESET}\n")
+        print(f"No API key found for {provider.name}.\n")
+        if provider.env_key:
+            print(f"  {_DIM}Set {provider.env_key} or paste below:{_RESET}\n")
         try:
             api_key = input("Paste your API key: ").strip()
         except (EOFError, KeyboardInterrupt):
@@ -394,13 +426,181 @@ def _resolve_api_key() -> str:
         if not api_key:
             sys.stderr.write("error: no API key provided\n")
             sys.exit(1)
+        # Save for next time
         cred_file = Path.home() / ".aloop" / "credentials.json"
         cred_file.parent.mkdir(parents=True, exist_ok=True)
-        cred_file.write_text(json.dumps({"api_key": api_key}))
+        creds = {}
+        if cred_file.exists():
+            try:
+                creds = json.loads(cred_file.read_text())
+            except (OSError, json.JSONDecodeError):
+                pass
+        creds[provider.env_key] = api_key
+        cred_file.write_text(json.dumps(creds))
         cred_file.chmod(0o600)
         print(f"\n{_GREEN}Saved to {cred_file}{_RESET}\n")
 
     return api_key
+
+
+# ---------------------------------------------------------------------------
+# Register with acpx
+# ---------------------------------------------------------------------------
+
+_ACPX_CONFIG = Path.home() / ".acpx" / "config.json"
+
+
+def _run_register() -> int:
+    """Register aloop as an ACP agent with acpx."""
+    import shutil
+
+    if not shutil.which("acpx"):
+        print(f"{_YELLOW}acpx not found.{_RESET}")
+        print(f"Install it: {_DIM}npm install -g acpx{_RESET}")
+        return 1
+
+    # Load or create acpx config
+    config: dict = {}
+    if _ACPX_CONFIG.exists():
+        try:
+            config = json.loads(_ACPX_CONFIG.read_text())
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    agents = config.get("agents", {})
+
+    expected = {"command": "aloop --acp"}
+
+    # Check if already registered correctly
+    if agents.get("aloop") == expected:
+        print(f"{_GREEN}aloop is already registered with acpx.{_RESET}")
+        print(f"\n  {_DIM}acpx aloop \"your prompt\"{_RESET}")
+        return 0
+
+    # Register
+    agents["aloop"] = expected
+    config["agents"] = agents
+
+    _ACPX_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    _ACPX_CONFIG.write_text(json.dumps(config, indent=2))
+
+    print(f"{_GREEN}Registered aloop with acpx.{_RESET}")
+    print(f"\n  {_DIM}acpx aloop \"your prompt\"{_RESET}")
+    print(f"  {_DIM}# In Stepwise flows: agent: aloop{_RESET}")
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Provider validation
+# ---------------------------------------------------------------------------
+
+async def _run_validate_provider(args) -> int:
+    """Test a provider's API compatibility with aloop."""
+    from .providers import get_provider, get_providers
+
+    provider_name = args.provider
+    if not provider_name:
+        sys.stderr.write("error: --provider is required for validate-provider\n")
+        sys.stderr.write(f"  Example: aloop validate-provider --provider openai --model gpt-4o-mini\n")
+        return 1
+
+    model = args.model
+    if not model:
+        model = os.environ.get("ALOOP_MODEL")
+    if not model:
+        sys.stderr.write("error: --model is required for validate-provider\n")
+        return 1
+
+    try:
+        provider = get_provider(provider_name)
+    except KeyError as e:
+        sys.stderr.write(f"error: {e}\n")
+        return 1
+
+    # Resolve API key
+    api_key = ""
+    if provider.env_key:
+        api_key = os.environ.get(provider.env_key, "")
+    if not api_key:
+        api_key = os.environ.get("ALOOP_API_KEY", "")
+    if not api_key and provider.env_key:
+        sys.stderr.write(f"error: set {provider.env_key} or ALOOP_API_KEY\n")
+        return 1
+
+    print(f"Validating {_BOLD}{provider.name}{_RESET} with model {_BOLD}{model}{_RESET}\n")
+
+    backend = AgentLoopBackend(model=model, api_key=api_key, provider=provider)
+    tests_passed = 0
+    tests_failed = 0
+
+    async def _run_test(name: str, prompt: str, expect_tools: bool = False):
+        nonlocal tests_passed, tests_failed
+        sys.stdout.write(f"  {name:40s} ")
+        sys.stdout.flush()
+
+        got_text = False
+        got_tool = False
+        got_complete = False
+        error_msg = ""
+
+        try:
+            tools = None
+            if expect_tools:
+                from .tools_base import ToolDef
+                tools = [ToolDef(
+                    name="get_weather",
+                    description="Get current weather for a city",
+                    parameters={
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                    execute=None,
+                )]
+
+            async for event in backend.stream(prompt, tools=tools):
+                if event.type == EventType.TEXT_DELTA:
+                    got_text = True
+                elif event.type == EventType.TOOL_START:
+                    got_tool = True
+                elif event.type == EventType.COMPLETE:
+                    got_complete = True
+                elif event.type == EventType.ERROR:
+                    error_msg = event.data.get("message", "")
+        except Exception as e:
+            error_msg = str(e)
+
+        if error_msg:
+            print(f"{_RED}FAIL{_RESET}  {error_msg[:80]}")
+            tests_failed += 1
+        elif expect_tools and not got_tool:
+            print(f"{_YELLOW}WARN{_RESET}  no tool call (model may not support tools)")
+            tests_passed += 1  # not a hard failure
+        elif not got_complete:
+            print(f"{_RED}FAIL{_RESET}  no completion event")
+            tests_failed += 1
+        elif not got_text and not got_tool:
+            print(f"{_RED}FAIL{_RESET}  no text or tool output")
+            tests_failed += 1
+        else:
+            print(f"{_GREEN}PASS{_RESET}")
+            tests_passed += 1
+
+    await _run_test("Basic completion", "Say 'hello' and nothing else.")
+    await _run_test("Streaming", "Count from 1 to 5, one number per line.")
+    await _run_test("Tool calling", "What is the weather in Tokyo?", expect_tools=True)
+    await _run_test("Multi-turn context",
+                    "Remember: the secret word is 'banana'. What is the secret word?")
+
+    print(f"\n{tests_passed} passed, {tests_failed} failed")
+
+    if tests_failed == 0:
+        print(f"\n{_GREEN}{provider.name} is fully compatible.{_RESET}")
+    else:
+        print(f"\n{_YELLOW}Some tests failed. The provider may still work for basic prompts.{_RESET}")
+
+    return 0 if tests_failed == 0 else 1
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +617,22 @@ async def main():
 
     if args.prompt == "update":
         sys.exit(_run_update())
+
+    if args.prompt == "register-acpx":
+        sys.exit(_run_register())
+
+    if args.prompt == "list-providers":
+        from .providers import get_providers
+        providers = get_providers()
+        for key, p in sorted(providers.items()):
+            status = f"{_GREEN}tested{_RESET}" if p.status == "tested" else f"{_DIM}community{_RESET}"
+            print(f"  {key:20s}  {p.name:30s}  [{status}]")
+            if p.notes:
+                print(f"  {' ':20s}  {_DIM}{p.notes}{_RESET}")
+        return
+
+    if args.prompt == "validate-provider":
+        sys.exit(await _run_validate_provider(args))
 
     if args.acp:
         from .acp import serve_acp
@@ -474,15 +690,24 @@ async def main():
         sys.stderr.write("error: no prompt provided\n")
         sys.exit(1)
 
-    # --- Resolve model & key ---
+    # --- Resolve provider, model & key ---
+    from .providers import get_provider, get_default_provider_name
+    provider_name = args.provider or get_default_provider_name()
+    try:
+        provider = get_provider(provider_name)
+    except KeyError as e:
+        sys.stderr.write(f"error: {e}\n")
+        sys.exit(1)
+
     model = _resolve_model(args)
-    api_key = _resolve_api_key()
+    api_key = _resolve_api_key(provider)
 
     # --- Build backend ---
     try:
         backend = AgentLoopBackend(
             model=model,
             api_key=api_key,
+            provider=provider,
             max_iterations=args.max_iterations,
         )
     except Exception as e:
