@@ -42,7 +42,7 @@ Small, embeddable, extensible through your project — not the library.
 
 ### Any model, any provider
 
-5 tested providers (OpenRouter, OpenAI, Anthropic, Google, Groq). Together AI and Ollama also supported. Custom providers in 4 lines of JSON.
+5 tested providers (OpenRouter, OpenAI, Anthropic, Google, Groq), plus any endpoint compatible with the OpenAI chat completions API. Add custom providers in 4 lines of JSON, validate with `aloop providers validate`.
 
 ```bash
 aloop --model x-ai/grok-4.1-fast "refactor this"
