@@ -2,39 +2,23 @@
 
 A provider-agnostic, embeddable agent loop. Use any LLM from any provider, extend through hooks, embed as a Python library, drive from the CLI, or expose as an ACP server.
 
-### Documentation
-
 **Usage**
-- [Embedding Guide](docs/EMBEDDING.md) — Python API, `ALoop`, `stream()`, events, tools, sessions
 - [CLI Reference](docs/CLI.md) — subcommands, flags, output formats, scripting
 - [ACP Integration](docs/ACP.md) — acpx, Stepwise, editors, protocol details
+- [Embedding Guide](docs/EMBEDDING.md) — Python API, `ALoop`, `stream()`, events, tools, sessions
 
 **Configuration**
-- [System Prompt](docs/SYSTEM-PROMPT.md) — full prompt transparency, template mode, section overrides
-- [Hooks](docs/HOOKS.md) — 10 hook points, `@tool` decorator, `ToolRejected`, execution order
 - [Config](docs/CONFIG.md) — JSONC config, modes, global/project layering
+- [Hooks](docs/HOOKS.md) — 10 hook points, `@tool` decorator, `ToolRejected`, execution order
+- [System Prompt](docs/SYSTEM-PROMPT.md) — full prompt transparency, template mode, section overrides
 - [AGENTS.md](docs/AGENTS-MD.md) — project instruction file convention
 
 **Internals**
-- [Compaction](docs/COMPACTION.md) — context summarization, file restoration, circuit breaker
-- [File Resolution](docs/FILE-RESOLUTION.md) — discovery chains, global/project layering, merge rules
 - [Architecture](docs/ARCHITECTURE.md) — data flow, module map, event protocol
+- [File Resolution](docs/FILE-RESOLUTION.md) — discovery chains, global/project layering, merge rules
+- [Compaction](docs/COMPACTION.md) — context summarization, file restoration, circuit breaker
 
 ---
-
-```python
-from aloop import ALoop, EventType
-
-loop = ALoop(model="x-ai/grok-4.1-fast")
-
-async for event in loop.stream("Read README.md and summarize it"):
-    if event.type == EventType.TEXT_DELTA:
-        print(event.data["text"], end="")
-```
-
-```bash
-aloop "What files are in this directory?"
-```
 
 ## Why aloop?
 
@@ -50,9 +34,9 @@ Small, embeddable, extensible through your project — not the library.
 
 ### Who is this for?
 
-- **Embedding agents in your product?** Python API, CLI, or ACP — pick the integration that fits. Five lines to a streaming agent with tools and sessions.
-- **Outgrown vendor-locked agents?** Any model, any provider, domain-specific tools via hooks, headless automation, editor integration.
-- **Multi-step AI workflows?** First-class [ACP](https://agentclientprotocol.com) step executor for [Stepwise](https://github.com/zackham/stepwise) and any ACP orchestrator.
+- **Want full control over your agent?** System prompt, tools, context, compaction — everything is overridable, inspectable, and [documented](docs/SYSTEM-PROMPT.md). No black boxes.
+- **Need an open, extensible foundation?** 10 hook points, `@tool` decorator, JSONC config, named modes. Extend through your project, not the library.
+- **Integrating agents into your stack?** Python API, CLI, or [ACP](https://agentclientprotocol.com) — embed in your app, script from shell, or plug into editors and orchestrators like [Stepwise](https://github.com/zackham/stepwise).
 
 ## Key Features
 
