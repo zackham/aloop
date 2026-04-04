@@ -19,6 +19,7 @@ aloop --model x-ai/grok-4.1-fast "what files are in this directory?"
 **Configuration**
 - [Config](docs/CONFIG.md) — JSONC config, modes, global/project layering
 - [Hooks](docs/HOOKS.md) — 10 hook points, `@tool` decorator, `ToolRejected`, execution order
+- [Permissions](docs/PERMISSIONS.md) — tool sets, path restrictions, readonly modes, security model
 - [System Prompt](docs/SYSTEM-PROMPT.md) — full prompt transparency, template mode, section overrides
 - [AGENTS.md](docs/AGENTS-MD.md) — project instruction file convention
 

@@ -179,8 +179,7 @@ Named mode configs that let you switch between different configurations per sess
       "max_iterations": 50
     },
     "review": {
-      "system_prompt_file": ".aloop/prompts/reviewer.md",
-      "tools": ["read_file", "bash"],
+      "tools": ["read_file", "grep", "find", "ls", "load_skill"],
       "model": "x-ai/grok-4.1-fast"
     },
     "fast": {
@@ -197,11 +196,14 @@ Named mode configs that let you switch between different configurations per sess
 |-------|------|--------|
 | `system_prompt` | `string` | Inline system prompt for this mode |
 | `system_prompt_file` | `string` | Path to system prompt file (relative to project root) |
-| `tools` | `list[string]` | Whitelist of tool names (filters available tools) |
+| `tools` | `list[string]` | Tool names available in this mode. `["*"]` for all tools. |
+| `permissions` | `object` | Path restrictions for this mode. See [Permissions](PERMISSIONS.md). |
 | `model` | `string` | Model ID override |
 | `provider` | `string` | Provider override |
 | `compaction` | `object` | Compaction settings override (`reserve_tokens`, `keep_recent_tokens`, etc.) |
 | `max_iterations` | `int` | Max agent loop iterations |
+
+Available tool names: `read_file`, `write_file`, `edit_file`, `bash`, `grep`, `find`, `ls`, `load_skill`, plus any tools registered via hooks. See [Permissions](PERMISSIONS.md) for tool sets and security model.
 
 ### Mode behavior
 
@@ -259,6 +261,24 @@ Any OpenRouter model ID works directly with `--model` or `ALOOP_MODEL`. For shor
 ```
 
 Then use: `aloop --model fast "your prompt"`
+
+## Permissions
+
+Declarative path restrictions and tool set enforcement. See [Permissions](PERMISSIONS.md) for the full reference.
+
+```jsonc
+{
+  "permissions": {
+    "paths": {
+      "deny": [".env", "**/*.key"],
+      "allow_outside_project": false,
+      "write": ["src/**", "tests/**"]
+    }
+  }
+}
+```
+
+No `permissions` key = no restrictions (default).
 
 ## Compaction Configuration
 

@@ -116,7 +116,35 @@ except ModeConflictError as e:
     print(e)  # "Session 's1' was created with mode 'review', cannot switch to 'code'."
 ```
 
-See [Config](CONFIG.md) for full mode configuration reference.
+See [Config](CONFIG.md) for full mode configuration reference and [Permissions](PERMISSIONS.md) for tool sets and path restrictions.
+
+### Tool sets
+
+aloop ships three tool sets. Use `tools=` on `stream()` or configure via modes.
+
+```python
+from aloop import CODING_TOOLS, READONLY_TOOLS, ALL_TOOLS
+
+# Default — full access (read, write, edit, bash, skill)
+async for event in backend.stream("Fix the bug", tools=CODING_TOOLS):
+    ...
+
+# Safe exploration — no shell, no writes (read, grep, find, ls, skill)
+async for event in backend.stream("What does this codebase do?", tools=READONLY_TOOLS):
+    ...
+
+# Everything
+async for event in backend.stream("Explore and fix", tools=ALL_TOOLS):
+    ...
+```
+
+### PermissionDenied
+
+When a tool call is blocked by permissions, the model receives a `PermissionDenied` error (subclass of `ToolRejected`). The model can then adapt its approach.
+
+```python
+from aloop import PermissionDenied
+```
 
 ### run()
 

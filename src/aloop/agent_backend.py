@@ -37,7 +37,7 @@ from .hooks import (
     run_on_pre_compaction,
     run_on_post_compaction,
 )
-from .tools import ANALYSIS_TOOLS
+from .tools import ALL_TOOLS, ANALYSIS_TOOLS
 from .tools_base import ToolDef, ToolRejected, ToolResult
 from .types import EventType, InferenceError, InferenceEvent, RunResult
 
@@ -109,6 +109,10 @@ class ALoop:
         self._default_provider = self.provider
         self._default_compaction = self.config.compaction
         self._default_max_iterations = self.config.max_iterations
+
+        # Permission state (set per-stream-call based on mode)
+        self._active_permissions: dict | None = None
+        self._active_allowed_tools: set[str] | None = None
 
         self._input_tokens = 0
         self._output_tokens = 0
@@ -227,20 +231,25 @@ class ALoop:
         # 1. If tools= is explicitly set → REPLACE entire set (explicit override)
         # 2. Otherwise: start with mode's tool list (or defaults),
         #    add register_tools hooks, add extra_tools
+        # When a mode defines tools, ALL_TOOLS is the available pool
+        # (includes grep/find/ls for readonly modes).
         if tools is not None:
             # Explicit override — use exactly what was passed
             pass
         else:
             if mode_config.get("tools"):
-                # Mode defines a tool whitelist — filter defaults by name
-                all_available = list(ANALYSIS_TOOLS)
+                # Mode defines a tool whitelist — filter from full pool
+                all_available = list(ALL_TOOLS)
                 hook_tools = run_register_tools()
                 if hook_tools:
                     all_available.extend(hook_tools)
                 allowed_names = set(mode_config["tools"])
-                tools = [t for t in all_available if t.name in allowed_names]
+                if "*" in allowed_names:
+                    tools = all_available
+                else:
+                    tools = [t for t in all_available if t.name in allowed_names]
             else:
-                # Start with defaults
+                # Start with defaults (CODING_TOOLS — no grep/find/ls)
                 tools = list(ANALYSIS_TOOLS)
                 # Add tools from register_tools hooks
                 hook_tools = run_register_tools()
@@ -249,6 +258,34 @@ class ALoop:
             # Add extra_tools if provided
             if extra_tools:
                 tools.extend(extra_tools)
+
+        # Resolve permissions: global config → project config → mode config
+        # Mode permissions override project-level. No permissions key = no restrictions.
+        if mode is not None:
+            from .system_prompt import _load_aloop_config
+            from . import get_project_root as _gpr
+            _pc = _load_aloop_config(_gpr())
+            base_perms = _pc.get("permissions")
+            mode_perms = mode_config.get("permissions")
+            if mode_perms and base_perms:
+                # Mode overrides project — merge paths.deny (union), rest mode wins
+                merged = dict(base_perms)
+                merged.update(mode_perms)
+                if "paths" in base_perms and "paths" in mode_perms:
+                    merged_paths = dict(base_perms["paths"])
+                    merged_paths.update(mode_perms["paths"])
+                    # Deny lists are additive
+                    base_deny = base_perms.get("paths", {}).get("deny", [])
+                    mode_deny = mode_perms.get("paths", {}).get("deny", [])
+                    if base_deny or mode_deny:
+                        merged_paths["deny"] = list(set(base_deny + mode_deny))
+                    merged["paths"] = merged_paths
+                self._active_permissions = merged
+            else:
+                self._active_permissions = mode_perms or base_perms
+        else:
+            self._active_permissions = None
+        self._active_allowed_tools = {t.name for t in tools} if tools else None
 
         # Apply effective config for this stream call (mode may override).
         # These are set per-call; _default_* stores the constructor values.
@@ -856,6 +893,17 @@ class ALoop:
         *,
         tool_context: dict | None = None,
     ) -> ToolResult:
+        # Priority 0: built-in permission check (before user hooks)
+        from .permissions import check_permissions, PermissionDenied
+        try:
+            check_permissions(
+                tool_def.name, args,
+                allowed_tools=self._active_allowed_tools,
+                permissions=self._active_permissions,
+            )
+        except PermissionDenied as exc:
+            return ToolResult(content=str(exc.reason), is_error=True)
+
         # Run before_tool hooks (permissions, firebreaks, etc.)
         hook_result = run_before_tool(
             tool_def.name, args, **(tool_context or {}),

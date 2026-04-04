@@ -7,7 +7,7 @@ system prompt. Projects define themselves via AGENTS.md and .aloop/ config.
 from pathlib import Path
 import os
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 # Project root discovery: ALOOP_PROJECT_ROOT env var, or CWD
 def get_project_root() -> Path:
@@ -18,10 +18,12 @@ def get_project_root() -> Path:
 
 from .types import EventType, InferenceEvent, RunResult, InferenceResult, InferenceError, ModeConflictError
 from .tools_base import ToolDef, ToolResult, ToolRejected, tool, ToolParam
+from .permissions import PermissionDenied
 from .agent_backend import ALoop, AgentLoopBackend
 from .acp import serve_acp
 from .config import LoopConfig
 from .utils import strip_json_comments, load_jsonc
+from .tools import CODING_TOOLS, READONLY_TOOLS, ALL_TOOLS
 
 __all__ = [
     "get_project_root",
@@ -40,6 +42,10 @@ __all__ = [
     "ToolParam",
     "serve_acp",
     "LoopConfig",
+    "PermissionDenied",
+    "CODING_TOOLS",
+    "READONLY_TOOLS",
+    "ALL_TOOLS",
     "strip_json_comments",
     "load_jsonc",
 ]

@@ -2,6 +2,24 @@
 
 All notable changes to aloop are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.0] - 2026-04-03
+
+### Added
+- **Read-only exploration tools:** `grep` (wraps ripgrep), `find` (wraps fd, Python glob fallback), `ls` (pure Python readdir). Safe codebase exploration without shell access. Modeled on Pi's `readOnlyTools`.
+- **Tool sets:** `CODING_TOOLS` (default — read, write, edit, bash, skill), `READONLY_TOOLS` (read, grep, find, ls, skill), `ALL_TOOLS` (everything). `ANALYSIS_TOOLS` kept as backward-compat alias for `CODING_TOOLS`.
+- **Declarative permissions:** `permissions` config key in `.aloop/config.json` with path deny globs, project containment (`allow_outside_project`), additional dirs, write path restrictions. No config = no restrictions (yolo default).
+- **Per-mode permissions:** modes can define `permissions` alongside `tools` for scoped restrictions.
+- **`PermissionDenied`:** subclass of `ToolRejected` for permission check failures. Agents can distinguish "not allowed" from other hook rejections.
+- **`"tools": ["*"]`** wildcard in mode config — selects all available tools including grep/find/ls.
+- **Hardcoded safety net:** non-overridable write denies (`.git/**`, `.aloop/config.json`) and bash denies (`rm -rf /`, fork bombs, `mkfs`, `dd if=`). Always active.
+- **Built-in permission hook** at priority 0 — runs before all user hooks. Enforces tool set, path restrictions, and hardcoded denies.
+- **[Permissions docs](docs/PERMISSIONS.md):** full reference for security model, tool sets, config format, and design philosophy.
+- 47 new tests (389 total).
+
+### Changed
+- Mode tool resolution now draws from `ALL_TOOLS` pool (was `ANALYSIS_TOOLS`), so modes can select grep/find/ls.
+- Updated CONFIG.md, HOOKS.md, ARCHITECTURE.md, EMBEDDING.md, README.md with permissions references.
+
 ## [0.3.0] - 2026-04-03
 
 ### Breaking

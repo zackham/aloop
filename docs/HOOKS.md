@@ -38,6 +38,7 @@ All hooks are optional. The harness works without any hooks configured. Hook fai
 
 ## Execution Order
 
+0. **Built-in permission check** runs before all hooks (priority 0). See [Permissions](PERMISSIONS.md).
 1. Global hooks run first, project hooks second
 2. Alphabetical within each scope
 3. `before_tool`: first rejection short-circuits — later hooks don't run
