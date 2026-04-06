@@ -768,3 +768,266 @@ class TestTurnIdInjection:
         assert "turn_id" in captured["context"]
         assert "session_id" in captured["context"]
         assert captured["context"]["session_id"] == "sess1"
+
+
+# ---------------------------------------------------------------------------
+# Bug 6: _session_modes dict must be bounded
+# ---------------------------------------------------------------------------
+
+
+class TestSessionModesBoundedMemory:
+    def test_session_modes_bounded_memory(self, tmp_path):
+        """Long-running parents that spawn many child sessions should not
+        leak memory through the _session_modes dict. The dict is capped
+        at MAX_SESSION_MODES_ENTRIES with FIFO eviction.
+        """
+        from aloop.agent_backend import ALoop, MAX_SESSION_MODES_ENTRIES
+
+        backend = ALoop(model="minimax-m2.5", api_key="test-key")
+        # Insert way more than the cap.
+        for i in range(MAX_SESSION_MODES_ENTRIES + 500):
+            backend._record_session_mode(f"session_{i}", "test_mode")
+
+        assert len(backend._session_modes) == MAX_SESSION_MODES_ENTRIES
+        # The oldest entries should be evicted (FIFO).
+        assert "session_0" not in backend._session_modes
+        # The most recent entries should still be present.
+        assert f"session_{MAX_SESSION_MODES_ENTRIES + 499}" in backend._session_modes
+
+    def test_record_session_mode_refreshes_on_repeat(self, tmp_path):
+        """Re-recording an existing session_id moves it to the end so
+        it's not evicted as 'oldest'."""
+        from aloop.agent_backend import ALoop, MAX_SESSION_MODES_ENTRIES
+
+        backend = ALoop(model="minimax-m2.5", api_key="test-key")
+        backend._record_session_mode("alpha", "mode_a")
+        for i in range(MAX_SESSION_MODES_ENTRIES - 1):
+            backend._record_session_mode(f"filler_{i}", "mode_b")
+        # alpha is currently the oldest entry. Refresh it.
+        backend._record_session_mode("alpha", "mode_a")
+        # Now add one more entry — alpha should NOT be evicted.
+        backend._record_session_mode("z", "mode_z")
+        assert "alpha" in backend._session_modes
+        assert len(backend._session_modes) == MAX_SESSION_MODES_ENTRIES
+
+
+# ---------------------------------------------------------------------------
+# Issue 7: fork-from-fork end-to-end
+# ---------------------------------------------------------------------------
+
+
+class TestForkFromForkRecursive:
+    @pytest.mark.asyncio
+    async def test_fork_from_fork_recursive(self, tmp_path):
+        """Recursive forking: parent forks → child, child forks → grandchild.
+
+        Verify:
+        - Child has fork_from = parent
+        - Grandchild has fork_from = child
+        - Both have spawn_metadata with kind="fork"
+        - The child's _session_modes propagation lets the grandchild's
+          spawn validation work (the child's mode label is inherited from
+          the parent so the grandchild can see can_fork on the same mode).
+        """
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+
+        config = {
+            "modes": {
+                "orch": {
+                    "can_fork": True,
+                    "tools": ["read_file"],
+                },
+            }
+        }
+
+        backend = ALoop(model="minimax-m2.5", api_key="test-key")
+
+        # Track how many turns each context (parent/child/grandchild) has
+        # taken so we can return text after the first tool-call turn for
+        # the child too. This avoids the child spinning until max iters.
+        state = {
+            "parent_turns": 0,
+            "child_turns": 0,
+            "grandchild_turns": 0,
+        }
+
+        async def mock_stream(messages, system_prompt, tools, **kw):
+            from aloop.agent_result import FORK_BOILERPLATE
+            last_user = next(
+                (m for m in reversed(messages) if m.get("role") == "user"), None
+            )
+            content = (last_user or {}).get("content", "") or ""
+            is_subagent = isinstance(content, str) and content.startswith(
+                FORK_BOILERPLATE
+            )
+            is_grandchild = is_subagent and "GRANDCHILD_DIRECTIVE" in content
+            is_child = is_subagent and not is_grandchild
+
+            if is_grandchild:
+                state["grandchild_turns"] += 1
+                yield {"type": "text", "text": "grandchild done"}
+                yield {"type": "usage", "usage": {"prompt_tokens": 3, "completion_tokens": 3}}
+                return
+
+            if is_child:
+                state["child_turns"] += 1
+                if state["child_turns"] == 1:
+                    # First child turn — spawn the grandchild via fork
+                    yield {
+                        "type": "tool_call_delta",
+                        "index": 0,
+                        "id": "tc_grand",
+                        "function": {
+                            "name": "agent",
+                            "arguments": json.dumps({
+                                "prompt": "GRANDCHILD_DIRECTIVE explore deeper",
+                                "description": "deeper",
+                            }),
+                        },
+                    }
+                    yield {"type": "usage", "usage": {"prompt_tokens": 5, "completion_tokens": 3}}
+                else:
+                    # Second child turn — return text so the child loop ends
+                    yield {"type": "text", "text": "child summary with grandchild result"}
+                    yield {"type": "usage", "usage": {"prompt_tokens": 5, "completion_tokens": 3}}
+                return
+
+            # Parent: first call emits tool call, subsequent emits text
+            state["parent_turns"] += 1
+            if state["parent_turns"] == 1:
+                yield {
+                    "type": "tool_call_delta",
+                    "index": 0,
+                    "id": "tc_child",
+                    "function": {
+                        "name": "agent",
+                        "arguments": json.dumps({
+                            "prompt": "explore for me",
+                            "description": "explore",
+                        }),
+                    },
+                }
+                yield {"type": "usage", "usage": {"prompt_tokens": 5, "completion_tokens": 3}}
+            else:
+                yield {"type": "text", "text": "parent summary"}
+                yield {"type": "usage", "usage": {"prompt_tokens": 5, "completion_tokens": 3}}
+
+        with (
+            patch.object(backend, "_stream_completion", side_effect=mock_stream),
+            patch("aloop.system_prompt._load_aloop_config", return_value=config),
+            patch("aloop.session._sessions_dir", return_value=sessions_dir),
+            patch("aloop.get_project_root", return_value=tmp_path),
+        ):
+            async for _ in backend.stream("start", mode="orch", session_id="grandparent"):
+                pass
+
+        # Find all sessions
+        ctx_files = list(sessions_dir.glob("*.context.json"))
+        sessions_by_fork_from: dict[str | None, list[dict]] = {}
+        for f in ctx_files:
+            data = json.loads(f.read_text())
+            sessions_by_fork_from.setdefault(data.get("fork_from"), []).append(data)
+
+        # Original parent has fork_from=None
+        assert "grandparent" in [s.get("session_id") for s in sessions_by_fork_from.get(None, [])]
+
+        # Find direct children of grandparent
+        children = sessions_by_fork_from.get("grandparent", [])
+        assert len(children) == 1, f"expected 1 direct child, got {len(children)}"
+        child = children[0]
+        assert child["spawn_metadata"]["kind"] == "fork"
+        assert child["spawn_metadata"]["parent_session_id"] == "grandparent"
+        # Mode label propagated through fork
+        assert child["spawn_metadata"]["spawning_mode"] == "orch"
+
+        # Find grandchildren (children of child)
+        child_id = child["session_id"]
+        grandchildren = sessions_by_fork_from.get(child_id, [])
+        assert len(grandchildren) == 1, (
+            f"expected 1 grandchild forked from child {child_id}, got {len(grandchildren)}"
+        )
+        grandchild = grandchildren[0]
+        assert grandchild["spawn_metadata"]["kind"] == "fork"
+        assert grandchild["spawn_metadata"]["parent_session_id"] == child_id
+        assert grandchild["spawn_metadata"]["spawning_mode"] == "orch"
+
+
+# ---------------------------------------------------------------------------
+# Issue 8: fork child inherits parent mode label via _session_modes
+# ---------------------------------------------------------------------------
+
+
+class TestForkChildInheritsParentModeLabel:
+    @pytest.mark.asyncio
+    async def test_fork_child_inherits_parent_mode_label(self, tmp_path):
+        """After a fork spawn, the parent_loop._session_modes dict should
+        record the child session under the parent's mode name. This is
+        what enables fork-from-fork to find the same spawnable_modes
+        config on recursive spawns.
+        """
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+
+        config = {"modes": {"orch": {"can_fork": True, "tools": ["read_file"]}}}
+        backend = ALoop(model="minimax-m2.5", api_key="test-key")
+
+        call_count = {"n": 0}
+
+        async def mock_stream(messages, system_prompt, tools, **kw):
+            from aloop.agent_result import FORK_BOILERPLATE
+            n = call_count["n"]
+            call_count["n"] += 1
+            last_user = next(
+                (m for m in reversed(messages) if m.get("role") == "user"), None
+            )
+            content = (last_user or {}).get("content", "") or ""
+            is_child = isinstance(content, str) and content.startswith(
+                FORK_BOILERPLATE
+            )
+            if is_child:
+                yield {"type": "text", "text": "child"}
+                yield {"type": "usage", "usage": {"prompt_tokens": 3, "completion_tokens": 3}}
+                return
+            if n == 0:
+                yield {
+                    "type": "tool_call_delta",
+                    "index": 0,
+                    "id": "tc_1",
+                    "function": {
+                        "name": "agent",
+                        "arguments": json.dumps({
+                            "prompt": "explore",
+                            "description": "x",
+                        }),
+                    },
+                }
+                yield {"type": "usage", "usage": {"prompt_tokens": 5, "completion_tokens": 3}}
+            else:
+                yield {"type": "text", "text": "ok"}
+                yield {"type": "usage", "usage": {"prompt_tokens": 5, "completion_tokens": 3}}
+
+        with (
+            patch.object(backend, "_stream_completion", side_effect=mock_stream),
+            patch("aloop.system_prompt._load_aloop_config", return_value=config),
+            patch("aloop.session._sessions_dir", return_value=sessions_dir),
+            patch("aloop.get_project_root", return_value=tmp_path),
+        ):
+            async for _ in backend.stream("start", mode="orch", session_id="parent_inherit"):
+                pass
+
+        # The parent and the fork child should both be tracked in
+        # _session_modes under the "orch" mode label.
+        assert backend._session_modes.get("parent_inherit") == "orch"
+        # Find the child session
+        ctx_files = list(sessions_dir.glob("*.context.json"))
+        child_ids = []
+        for f in ctx_files:
+            data = json.loads(f.read_text())
+            if data.get("fork_from") == "parent_inherit":
+                child_ids.append(data["session_id"])
+        assert len(child_ids) == 1
+        child_id = child_ids[0]
+        assert backend._session_modes.get(child_id) == "orch", (
+            f"expected child {child_id} to inherit 'orch' mode label from parent"
+        )

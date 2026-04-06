@@ -51,9 +51,11 @@ __all__ = [
     "strip_json_comments",
     "load_jsonc",
     # Subagents (v0.6.0)
+    # Note: AgentExecutionHandle is intentionally NOT in __all__ — it's
+    # an implementation detail returned by executor.spawn(). Library users
+    # don't construct it directly. Still importable from aloop.executor.
     "AgentResult",
     "AgentExecutor",
-    "AgentExecutionHandle",
     "InProcessExecutor",
     "FORK_BOILERPLATE",
     "extract_partial_result",

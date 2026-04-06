@@ -85,7 +85,7 @@ def extract_partial_result(messages: list[dict]) -> str:
             continue
         content = msg.get("content")
         if isinstance(content, str) and content.strip():
-            return content
+            return content.strip()
         if isinstance(content, list):
             text_parts = [
                 str(b.get("text", ""))

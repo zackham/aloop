@@ -54,7 +54,9 @@ def _format_mode_listing(spawnable: list[str], all_modes: dict[str, dict]) -> st
     """Format the spawnable modes block for the tool description.
 
     For each spawnable mode, include its tool list and the first line of
-    its system prompt (if any) as a brief one-line summary.
+    its inline system_prompt (if any) as a brief one-line summary. We
+    deliberately do NOT fall back to system_prompt_file — showing a file
+    path as the description is confusing for the model.
     """
     if not spawnable:
         return "  (none — only fork mode is available)"
@@ -73,7 +75,7 @@ def _format_mode_listing(spawnable: list[str], all_modes: dict[str, dict]) -> st
         else:
             tools_str = "default tools"
 
-        sp = mode_cfg.get("system_prompt") or mode_cfg.get("system_prompt_file") or ""
+        sp = mode_cfg.get("system_prompt") or ""
         if sp:
             first_line = str(sp).splitlines()[0][:80]
         else:
@@ -98,13 +100,15 @@ def build_agent_tool(
     parent_loop and executor so it can spawn children with the right
     machinery.
     """
-    description = _AGENT_TOOL_DESCRIPTION_TEMPLATE.format(
+    # Renamed from `description` to avoid shadowing the inner `_spawn_agent`
+    # parameter of the same name (which is the model-facing schema field).
+    tool_description = _AGENT_TOOL_DESCRIPTION_TEMPLATE.format(
         mode_listing=_format_mode_listing(spawnable_modes, all_modes),
     )
     if current_mode_name:
-        description += f"\n\nYou are currently in mode `{current_mode_name}`."
+        tool_description += f"\n\nYou are currently in mode `{current_mode_name}`."
     if not can_fork:
-        description += (
+        tool_description += (
             "\n\nNOTE: The fork path (omitting `mode`) is disabled for your "
             "current mode. You must specify a `mode`."
         )
@@ -208,7 +212,7 @@ def build_agent_tool(
 
     return ToolDef(
         name="agent",
-        description=description,
+        description=tool_description,
         parameters={
             "type": "object",
             "properties": {
