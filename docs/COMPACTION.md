@@ -102,6 +102,10 @@ Preview (first ~2000 bytes):
 
 `read_file` results are exempt — persisting a file read so the model reads it back would be circular.
 
+## Fork safety
+
+Before compacting a session, aloop materializes all forked children. This ensures no child session is left referencing messages that were rewritten by compaction. See [Sessions & Forking](SESSIONS.md) for details.
+
 ## Circuit breaker
 
 If compaction fails 3 consecutive times (model errors, timeout, malformed summary), auto-compaction is disabled for the rest of the session. This prevents wasting API calls on irrecoverable context. The counter resets on success.

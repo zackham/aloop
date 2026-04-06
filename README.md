@@ -25,6 +25,7 @@ aloop --model x-ai/grok-4.1-fast "what files are in this directory?"
 
 **Internals**
 - [Architecture](docs/ARCHITECTURE.md) — data flow, module map, event protocol
+- [Sessions & Forking](docs/SESSIONS.md) — persistence, branching, materialization, garbage collection
 - [File Resolution](docs/FILE-RESOLUTION.md) — discovery chains, global/project layering, merge rules
 - [Compaction](docs/COMPACTION.md) — context summarization, file restoration, circuit breaker
 
@@ -91,9 +92,9 @@ Different system prompts, tools, models, and compaction settings per workflow �
 aloop --mode review "check the auth module"
 ```
 
-### Sessions with automatic compaction
+### Sessions with forking and compaction
 
-Persistent sessions with context summarization, file restoration, and circuit breaker. Resume with `--continue` or `--resume ID`. See [Compaction](docs/COMPACTION.md).
+Persistent sessions with branching at any turn, context summarization, file restoration, and circuit breaker. Fork conversations for subagent patterns or edit+rerun workflows. Resume with `--continue` or `--resume ID`. See [Sessions & Forking](docs/SESSIONS.md) and [Compaction](docs/COMPACTION.md).
 
 ### ACP server
 

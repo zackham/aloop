@@ -164,7 +164,7 @@ Client (acpx/editor)              aloop serve
 | `session/prompt` | Send prompt, stream response events |
 | `session/cancel` | Cancel in-flight prompt |
 | `session/close` | Clean up session state |
-| `session/fork` | Branch a session |
+| `session/fork` | Branch a session at a turn (see [Sessions & Forking](SESSIONS.md)) |
 | `session/list` | List known sessions |
 | `set_session_mode` | Switch to a named mode config (model, tools, system prompt, compaction) |
 | `set_session_model` | Change model for a session (used by `acpx --model`) |

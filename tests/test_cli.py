@@ -206,7 +206,7 @@ def test_parse_args_system_prompt_rendered():
 def test_subcommands_set():
     """All expected subcommands should be in the SUBCOMMANDS set."""
     expected = {"run", "serve", "config", "providers", "update",
-                "register-acpx", "init", "version", "system-prompt"}
+                "register-acpx", "init", "version", "system-prompt", "sessions"}
     assert SUBCOMMANDS == expected
 
 

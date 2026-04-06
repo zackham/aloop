@@ -2,6 +2,28 @@
 
 All notable changes to aloop are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.0] - 2026-04-06
+
+### Added
+- **Session forking:** branch a conversation at any turn via parent pointers with recursive chain walk. Fork creates a lightweight child session referencing the parent — no message duplication on disk. Multiple forks from the same parent share the parent's messages.
+- **Turn ID persistence:** every message now carries a `turn_id` field (12-char hex). All messages within a turn share the same ID. Persisted in both `context.json` and `log.jsonl`. Turn IDs are the addressing unit for forking.
+- **`stream()` fork kwargs:** `fork_from` (parent session_id), `fork_at` (turn_id, defaults to last turn), `replace_turn` (edit+rerun — truncate and replace a turn in-place).
+- **`AgentSession.fork()`:** classmethod to create a forked child session. Validates parent exists and turn_id is valid.
+- **`AgentSession.resolve_messages()`:** walks the parent chain recursively, returning the full message history. Auto-materializes at depth 10.
+- **`AgentSession.materialize()`:** flattens the fork chain into a standalone session, severing parent dependency.
+- **`AgentSession.children()`:** scans session directory for sessions forked from this one.
+- **`AgentSession.fork_depth()`:** counts the depth of the fork chain.
+- **`gc_sessions()`:** garbage-collects expired sessions. Materializes children before deleting parents. Walks oldest-first.
+- **Compaction fork safety:** children are materialized before parent compaction, preventing broken references.
+- **ACP `fork_session`:** uses real fork machinery instead of creating blank sessions. Accepts `fork_turn_id` kwarg, defaults to forking at last turn.
+- **`aloop sessions` CLI subcommand:** `list`, `info <id>`, `gc [--max-age]`, `materialize <id>`.
+- **[Sessions & Forking docs](docs/SESSIONS.md):** full reference for turn IDs, forking, materialization, GC, and design rationale.
+- 58 new tests (447 total).
+
+### Changed
+- `list_sessions()` now returns `fork_from` and `fork_turn_id` in each session dict.
+- Updated ARCHITECTURE.md, ACP.md, CLI.md, EMBEDDING.md, COMPACTION.md, README.md with forking references.
+
 ## [0.4.0] - 2026-04-03
 
 ### Added

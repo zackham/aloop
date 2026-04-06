@@ -237,6 +237,38 @@ class AloopAgent:
         mcp_servers: Any | None = None,
         **kwargs: Any,
     ) -> ForkSessionResponse:
+        fork_turn_id = kwargs.get("fork_turn_id")
+
+        # Try to find the source session (in-memory first, then disk)
+        source: AgentSession | None = None
+        mem_state = self._sessions.get(session_id)
+        if mem_state and mem_state.agent_session:
+            source = mem_state.agent_session
+        else:
+            source = AgentSession.load(session_id)
+
+        # If source has messages with turn_ids, use real fork machinery
+        if source is not None:
+            resolved = source.resolve_messages()
+            if resolved and any(m.get("turn_id") for m in resolved):
+                if fork_turn_id is None:
+                    # Fork at the last turn
+                    for msg in reversed(resolved):
+                        if msg.get("turn_id"):
+                            fork_turn_id = msg["turn_id"]
+                            break
+
+                if fork_turn_id is not None:
+                    child = AgentSession.fork(
+                        parent_session_id=source.session_id,
+                        fork_turn_id=fork_turn_id,
+                    )
+                    state = self._create_session_state(child.session_id, cwd)
+                    state.agent_session = child
+                    self._sessions[child.session_id] = state
+                    return ForkSessionResponse(session_id=child.session_id)
+
+        # Fallback: create a blank session (no messages or no turn_ids)
         new_id = str(uuid4())
         state = self._create_session_state(new_id, cwd)
         self._sessions[new_id] = state

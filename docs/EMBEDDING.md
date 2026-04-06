@@ -72,6 +72,9 @@ async for event in backend.stream(
     persist_session=True,                    # optional, set False to disable persistence
     response_format={"type": "json_object"}, # optional, for structured output
     context={"user_id": "abc123"},           # optional, forwarded to hooks
+    fork_from="parent_session_id",           # optional, fork from another session
+    fork_at="turn_005",                      # optional, turn_id to fork at (default: last turn)
+    replace_turn="turn_003",                 # optional, edit+rerun — truncate and replace a turn
 ):
     ...
 ```
@@ -137,6 +140,37 @@ async for event in backend.stream("What does this codebase do?", tools=READONLY_
 async for event in backend.stream("Explore and fix", tools=ALL_TOOLS):
     ...
 ```
+
+### Forking sessions
+
+Fork a session to branch at any turn — for subagent patterns, edit+rerun, or exploring alternatives.
+
+```python
+# Fork from a specific turn
+async for event in backend.stream(
+    "try a different approach",
+    fork_from="parent_session_id",
+    fork_at="turn_005",
+):
+    ...
+
+# Fork from the latest turn (fork_at defaults to last)
+async for event in backend.stream(
+    "explore this alternative",
+    fork_from="parent_session_id",
+):
+    ...
+
+# Edit+rerun: truncate at a turn and replace with new prompt
+async for event in backend.stream(
+    "better prompt",
+    session_id="existing_session",
+    replace_turn="turn_003",
+):
+    ...
+```
+
+See [Sessions & Forking](SESSIONS.md) for the full model — materialization, garbage collection, compaction interaction, and design rationale.
 
 ### PermissionDenied
 

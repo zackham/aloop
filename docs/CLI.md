@@ -7,6 +7,11 @@ aloop's CLI is a thin wrapper around the Python API. Use it for interactive work
 ```
 aloop run [PROMPT]              Run a prompt (default when bare prompt given)
 aloop serve                     Run as ACP server over stdio
+aloop sessions list             List all sessions with fork metadata
+aloop sessions info ID          Show session details (messages, forks, children)
+aloop sessions gc [--max-age S] Garbage-collect expired sessions (default: 7 days)
+aloop sessions materialize ID   Flatten a forked session into standalone
+aloop sessions rebuild-index    Rebuild fork index from session files
 aloop config show               Show resolved configuration
 aloop config validate           Validate config files (JSONC parsing)
 aloop providers list            List available API providers
@@ -68,6 +73,30 @@ aloop --resume a7b3c9d2e1f4 "What about the database config?"
 aloop --session refactor "Start refactoring the auth module"
 aloop --resume refactor "Continue where we left off"
 ```
+
+## Session management
+
+```bash
+# List all sessions
+aloop sessions list
+
+# Show details for a session (messages, fork info, children)
+aloop sessions info a7b3c9d2e1f4
+
+# Garbage-collect sessions older than 7 days
+aloop sessions gc
+
+# Custom max age (in seconds)
+aloop sessions gc --max-age 86400
+
+# Materialize a forked session (flatten parent chain, sever dependency)
+aloop sessions materialize f8e2d1c0b9a8
+
+# Rebuild fork index (if you suspect stale data)
+aloop sessions rebuild-index
+```
+
+See [Sessions & Forking](SESSIONS.md) for details on forking, materialization, and garbage collection.
 
 ## Output formats
 

@@ -47,7 +47,7 @@ _STATE_FILE = Path.home() / ".aloop" / "state.json"
 # Known subcommands — used for implicit "run" injection
 SUBCOMMANDS = {
     "run", "serve", "config", "providers", "update",
-    "register-acpx", "init", "version", "system-prompt",
+    "register-acpx", "init", "version", "system-prompt", "sessions",
 }
 
 
@@ -179,6 +179,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     sp_parser = subparsers.add_parser("system-prompt", help="Show system prompt template")
     sp_parser.add_argument("--rendered", action="store_true",
                            help="Show fully interpolated prompt")
+
+    # --- sessions ---
+    sessions_parser = subparsers.add_parser("sessions", help="Session management")
+    sessions_sub = sessions_parser.add_subparsers(dest="sessions_action")
+    sessions_sub.add_parser("list", help="List all sessions with fork metadata")
+    sessions_info_parser = sessions_sub.add_parser("info", help="Show session details")
+    sessions_info_parser.add_argument("session_id", help="Session ID to inspect")
+    sessions_gc_parser = sessions_sub.add_parser("gc", help="Garbage-collect expired sessions")
+    sessions_gc_parser.add_argument("--max-age", type=int, default=604800,
+                                    help="Max age in seconds (default: 7 days)")
+    sessions_mat_parser = sessions_sub.add_parser("materialize", help="Materialize a forked session")
+    sessions_mat_parser.add_argument("session_id", help="Session ID to materialize")
+    sessions_sub.add_parser("rebuild-index", help="Rebuild the fork index cache")
 
     return parser.parse_args(args_list)
 
@@ -1058,6 +1071,103 @@ def _run_init() -> int:
 
 
 # ---------------------------------------------------------------------------
+# Sessions management
+# ---------------------------------------------------------------------------
+
+def _run_sessions(args) -> int:
+    """Handle the 'sessions' subcommand."""
+    from .session import AgentSession, list_sessions, gc_sessions
+
+    action = getattr(args, "sessions_action", None)
+
+    if action == "list":
+        sessions = list_sessions()
+        if not sessions:
+            print(f"{_DIM}No sessions found.{_RESET}")
+            return 0
+        print(f"{_BOLD}{'SESSION ID':<20s} {'MESSAGES':>8s} {'FORK FROM':<20s} {'FORK TURN':<14s} {'LAST ACTIVE'}{_RESET}")
+        for s in sessions:
+            sid = s.get("session_id", "?")
+            count = s.get("message_count", 0)
+            fork = s.get("fork_from") or ""
+            fturn = s.get("fork_turn_id") or ""
+            last_active = s.get("last_active")
+            if last_active:
+                import datetime
+                ts = datetime.datetime.fromtimestamp(last_active).strftime("%Y-%m-%d %H:%M")
+            else:
+                ts = "?"
+            print(f"  {sid:<20s} {count:>8d} {fork:<20s} {fturn:<14s} {ts}")
+        print(f"\n{_DIM}{len(sessions)} session(s){_RESET}")
+        return 0
+
+    elif action == "info":
+        sid = args.session_id
+        session = AgentSession.load(sid)
+        if session is None:
+            sys.stderr.write(f"error: session {sid!r} not found\n")
+            return 1
+        print(f"{_BOLD}Session: {session.session_id}{_RESET}")
+        print(f"  {_DIM}fork_from:{_RESET}    {session.fork_from or '(none)'}")
+        print(f"  {_DIM}fork_turn_id:{_RESET} {session.fork_turn_id or '(none)'}")
+        print(f"  {_DIM}fork_depth:{_RESET}   {session.fork_depth()}")
+        children = session.children()
+        print(f"  {_DIM}children:{_RESET}     {', '.join(children) if children else '(none)'}")
+        print(f"  {_DIM}messages:{_RESET}     {len(session.messages)} stored")
+        resolved = session.resolve_messages()
+        print(f"  {_DIM}resolved:{_RESET}     {len(resolved)} total")
+        if resolved:
+            print(f"\n{_BOLD}Messages:{_RESET}")
+            for i, msg in enumerate(resolved):
+                role = msg.get("role", "?")
+                turn_id = msg.get("turn_id", "")
+                content = str(msg.get("content", ""))
+                preview = content.replace("\n", " ")[:80]
+                if len(content) > 80:
+                    preview += "..."
+                print(f"  {i:3d}  {_DIM}[{turn_id or '-':>12s}]{_RESET} {role:<10s} {preview}")
+        return 0
+
+    elif action == "gc":
+        max_age = args.max_age
+        deleted = gc_sessions(max_age_seconds=max_age)
+        if deleted:
+            print(f"{_GREEN}Deleted {len(deleted)} session(s):{_RESET}")
+            for sid in deleted:
+                print(f"  {sid}")
+        else:
+            print(f"{_DIM}No expired sessions to clean up.{_RESET}")
+        return 0
+
+    elif action == "materialize":
+        sid = args.session_id
+        session = AgentSession.load(sid)
+        if session is None:
+            sys.stderr.write(f"error: session {sid!r} not found\n")
+            return 1
+        if session.fork_from is None:
+            print(f"{_DIM}Session {sid} is not forked — nothing to materialize.{_RESET}")
+            return 0
+        before_count = len(session.messages)
+        session.materialize()
+        print(f"{_GREEN}Materialized session {sid}{_RESET}")
+        print(f"  {_DIM}messages:{_RESET} {before_count} -> {len(session.messages)}")
+        print(f"  {_DIM}fork_from:{_RESET} cleared")
+        return 0
+
+    elif action == "rebuild-index":
+        from .session import _rebuild_fork_index
+        index = _rebuild_fork_index()
+        total = sum(len(v) for v in index.values())
+        print(f"Rebuilt fork index: {len(index)} parent(s), {total} child(ren)")
+        return 0
+
+    else:
+        sys.stderr.write("usage: aloop sessions {list,info,gc,materialize,rebuild-index}\n")
+        return 1
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1141,6 +1251,11 @@ async def main():
             print(build_system_prompt())
         print(f"\n{_DIM}---{_RESET}")
         print(f"{_DIM}Available variables: {{{{tools}}}}, {{{{skills}}}}, {{{{agents_md}}}}{_RESET}")
+        return
+
+    # --- sessions ---
+    if subcmd == "sessions":
+        sys.exit(_run_sessions(args))
         return
 
     # --- run (default) ---

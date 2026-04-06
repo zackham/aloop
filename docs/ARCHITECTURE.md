@@ -82,9 +82,33 @@ Fresh session:
 Resumed session:
   messages = [persisted history] → add new prompt → send → save
 
+Forked session:
+  messages = parent chain walk (recursive) + own messages → add prompt → send → save
+
 Stale session (>4h or >100 messages):
   auto-clear → treated as fresh
 ```
+
+### Session Forking
+
+Sessions support branching at any turn boundary via parent pointers:
+
+```
+Parent: [t1] [t2] [t3] [t4]
+                 ↑
+Child:   [t1] [t2] ← from parent (resolved on load)
+                     [t5] [t6] ← child's own messages
+```
+
+Key properties:
+- **Parent pointers, not copies** — child stores only `fork_from` + `fork_turn_id`, no message duplication
+- **Recursive chain walk** — nested forks resolve by walking the parent chain (auto-materialize at depth 10)
+- **Turn-boundary only** — fork points are after complete turns, never mid-tool-chain
+- **Immutable prefix** — parent messages up to fork point are treated as immutable by the child
+- **Compaction-safe** — children are materialized before parent compaction
+- **`materialize()`** — flattens chain into standalone session, severs parent dependency
+
+See [Sessions & Forking](SESSIONS.md) for full details.
 
 ## Streaming Protocol
 
@@ -169,7 +193,7 @@ The system prompt is designed for prefix caching (automatic on OpenRouter/Anthro
 | `system_prompt.py` | Prompt builder (template + section modes), config loading, instruction/skill discovery | utils |
 | `hooks.py` | Hook discovery and execution (global + project) | system_prompt (for config) |
 | `compaction.py` | Context summarization, file restoration | models, utils |
-| `session.py` | Persistent session management | compaction |
+| `session.py` | Persistent sessions, forking, materialization, GC | compaction |
 | `providers.py` | Provider registry (OpenRouter, OpenAI, Ollama, etc.) | utils |
 | `models.py` | Model registry with cost tracking | utils |
 | `utils.py` | JSONC parsing (strip_json_comments, load_jsonc) | — |

@@ -151,6 +151,9 @@ class ALoop:
         inject_context: bool = True,
         response_format: dict | None = None,
         context: dict | None = None,
+        fork_from: str | None = None,
+        fork_at: str | None = None,
+        replace_turn: str | None = None,
         # Deprecated — use session_id
         session_key: str | None = None,
         **kwargs,
@@ -297,18 +300,87 @@ class ALoop:
         # Build tool context from explicit context dict + any legacy kwargs
         tool_context = self._build_tool_context(context=context, kwargs=kwargs)
 
-        session = self._resolve_session(
-            session_id=session_id, persist_session=persist_session,
-        )
-        if session:
-            messages: list[dict[str, Any]] = list(session.messages)
-            self._last_compaction = session.last_compaction
-        else:
-            messages = []
+        # ── Fork / replace_turn handling ────────────────────────────────
+        session: AgentSession | None = None
+        messages: list[dict[str, Any]] = []
+        effective_session_id: str | None = session_id
+
+        if fork_from is not None:
+            if fork_at is None:
+                # Fork at the last turn — find the last turn_id in parent
+                parent = AgentSession.load(fork_from)
+                if parent is None:
+                    raise ValueError(f"Fork source session not found: {fork_from}")
+                resolved = parent.resolve_messages()
+                for msg in reversed(resolved):
+                    if msg.get("turn_id"):
+                        fork_at = msg["turn_id"]
+                        break
+                if fork_at is None:
+                    raise ValueError(f"No turns found in session {fork_from}")
+
+            child = AgentSession.fork(parent_session_id=fork_from, fork_turn_id=fork_at)
+            session = child
+            messages = child.resolve_messages()
+            effective_session_id = child.session_id
+            persist_session = True
             self._last_compaction = None
 
-        # Resolve the effective session_id for event tagging
-        effective_session_id = session.session_id if session else session_id
+        elif replace_turn is not None:
+            if session_id is None:
+                raise ValueError("replace_turn requires session_id")
+            existing = AgentSession.load(session_id)
+            if existing is None:
+                raise ValueError(f"Session {session_id} not found")
+
+            # Find ordered unique turn_ids
+            turn_ids: list[str] = []
+            for msg in existing.resolve_messages():
+                tid = msg.get("turn_id")
+                if tid and tid not in turn_ids:
+                    turn_ids.append(tid)
+
+            if replace_turn not in turn_ids:
+                raise ValueError(f"Turn {replace_turn} not found in session {session_id}")
+
+            replace_idx = turn_ids.index(replace_turn)
+            if replace_idx == 0:
+                # Replacing first turn — clear all messages
+                existing.messages = []
+            else:
+                # Keep messages up to and including the turn before replace_turn
+                keep_turn = turn_ids[replace_idx - 1]
+                resolved_msgs = existing.resolve_messages()
+                cut = 0
+                for i, msg in enumerate(resolved_msgs):
+                    if msg.get("turn_id") == keep_turn:
+                        cut = i + 1
+                existing.messages = resolved_msgs[:cut]
+                # If this was a fork, we've now inlined parent messages — clear fork refs
+                existing.fork_from = None
+                existing.fork_turn_id = None
+
+            existing.save_context()
+            session = existing
+            messages = list(existing.messages)
+            effective_session_id = session_id
+            persist_session = True
+            self._last_compaction = session.last_compaction
+
+        else:
+            # Normal (non-fork) session resolution
+            session = self._resolve_session(
+                session_id=session_id, persist_session=persist_session,
+            )
+            if session:
+                messages = list(session.messages)
+                self._last_compaction = session.last_compaction
+            else:
+                messages = []
+                self._last_compaction = None
+
+            # Resolve the effective session_id for event tagging
+            effective_session_id = session.session_id if session else session_id
 
         if prompt:
             user_msg = {"role": "user", "content": prompt}
@@ -354,6 +426,13 @@ class ALoop:
         for iteration in range(self.max_iterations):
             iteration_count = iteration + 1
             turn_id = uuid.uuid4().hex[:12]
+
+            # Stamp turn_id on the user message (iteration 0 only)
+            if iteration == 0:
+                for m in reversed(messages):
+                    if m.get("role") == "user" and "turn_id" not in m:
+                        m["turn_id"] = turn_id
+                        break
 
             # Track per-turn token deltas
             turn_input_before = self._input_tokens
@@ -439,6 +518,7 @@ class ALoop:
                 assistant_msg = {
                     "role": "assistant",
                     "content": content or None,
+                    "turn_id": turn_id,
                     "tool_calls": [
                         {
                             "id": tool_call.get("id", ""),
@@ -452,7 +532,7 @@ class ALoop:
                     ],
                 }
             else:
-                assistant_msg = {"role": "assistant", "content": content}
+                assistant_msg = {"role": "assistant", "content": content, "turn_id": turn_id}
 
             # Empty response guard — model returned no content and no tool_calls
             if not tool_calls and not content:
@@ -584,6 +664,7 @@ class ALoop:
                     "role": "tool",
                     "tool_call_id": tool_call_id,
                     "content": persisted,
+                    "turn_id": turn_id,
                 }
                 messages.append(tool_msg)
                 if session:
@@ -647,6 +728,14 @@ class ALoop:
                                     max_tool_result_chars=self.compaction_settings.max_tool_result_chars,
                                     compact_instructions=combined,
                                 )
+
+                            # Materialize forked children before compaction
+                            # changes parent messages they depend on
+                            if session:
+                                for child_id in session.children():
+                                    child_sess = AgentSession.load(child_id)
+                                    if child_sess and child_sess.fork_from == session.session_id:
+                                        child_sess.materialize()
 
                             messages, entry = await compact_context(
                                 messages=messages,
@@ -838,6 +927,9 @@ class ALoop:
         headers = {"Authorization": f"Bearer {self.api_key}"}
         headers.update(self.provider.extra_headers)
 
+        if self.api_key:
+            payload["api_key"] = self.api_key
+
         timeout = httpx.Timeout(timeout=120.0, connect=30.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(self.provider.base_url, json=payload, headers=headers)
@@ -986,6 +1078,10 @@ class ALoop:
 
         headers = {"Authorization": f"Bearer {self.api_key}"}
         headers.update(self.provider.extra_headers)
+
+        # Include api_key in body for endpoints that can't read headers (e.g. Modal)
+        if self.api_key:
+            payload["api_key"] = self.api_key
 
         for attempt in range(MAX_RETRIES + 1):
             try:
