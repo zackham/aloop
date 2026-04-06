@@ -2,6 +2,29 @@
 
 All notable changes to aloop are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.0] - 2026-04-06
+
+### Added
+- **Subagent support:** spawn child agents via the new built-in `agent` tool. Two paths — fork (inherit parent context via session forking + a fork-boilerplate directive) and fresh (clean session with scoped mode config). Recursive forking is allowed; fork children inherit the parent's mode label so they can spawn further.
+- **`agent` built-in tool:** model-facing delegation primitive. Auto-injected into modes that opt in via `spawnable_modes` or `can_fork`. The description is computed per-call from the mode's spawnable list. Returns the child's final assistant text plus a structured lineage footer.
+- **`AgentExecutor` protocol:** abstraction boundary between the agent tool and the spawn mechanism. `InProcessExecutor` is the default and only v0.6.0 implementation. A future subprocess executor can be slotted in without touching the agent tool.
+- **`AgentResult` dataclass:** structured result from spawned children — `text`, `session_id`, `spawn_kind`, `mode`, `parent_session_id`, `parent_turn_id`, `usage`.
+- **`extract_partial_result()`:** walks child message history backwards to find the last assistant text block. Used as fallback when a child exits without LOOP_END (e.g. hit max_iterations).
+- **Mode config fields:**
+  - `subagent_eligible: bool` — must be true for a mode to appear in another mode's `spawnable_modes` list.
+  - `spawnable_modes: list[str]` — per-mode allowlist of modes that can be spawned via the agent tool's fresh path.
+  - `can_fork: bool` — controls whether the fork path (mode omitted) is available.
+- **`spawn_metadata` on sessions:** child sessions persist `kind`, `parent_session_id`, `parent_turn_id`, `spawning_mode`, `child_mode`, `timestamp` for lineage tracking. Visible in `aloop sessions info <id>`.
+- **`validate_subagent_config()`:** validation function called by `aloop config validate` to catch invalid `spawnable_modes` references and missing `subagent_eligible` flags.
+- **`turn_id` and `session_id` injected into `_context`:** tools that declare a `_context` parameter now receive the current `turn_id` and `session_id` automatically. The agent tool relies on this to fork at the right point.
+- **Parent session save before tool loop:** when an assistant turn produces tool calls, the parent's session is now persisted before tools run. Ensures fork-during-tool-call sees the latest turn on disk.
+- ~95 new tests (~555 total).
+
+### Changed
+- `aloop sessions info <id>` now displays spawn metadata when present.
+- `__version__` bumped to 0.6.0 (note: 0.5.0 was inadvertently shipped as 0.4.0 in `__init__.py`; this release corrects that).
+- `ALoop.__init__` accepts an optional `executor: AgentExecutor` parameter.
+
 ## [0.5.0] - 2026-04-06
 
 ### Added

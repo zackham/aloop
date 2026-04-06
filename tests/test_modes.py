@@ -663,3 +663,61 @@ class TestModePrecedence:
             loop_start2 = next(e for e in events2 if e.type == EventType.LOOP_START)
             assert loop_start2.data["model"] == "minimax-m2.5"
             assert backend.max_iterations == 50
+
+
+# ---------------------------------------------------------------------------
+# Subagent mode config (v0.6.0)
+# ---------------------------------------------------------------------------
+
+
+class TestSubagentModeConfig:
+    def test_mode_with_spawnable_modes_loads_correctly(self):
+        from aloop.config import load_mode
+
+        config = {
+            "modes": {
+                "orch": {
+                    "spawnable_modes": ["explore", "reviewer"],
+                    "tools": ["read_file"],
+                },
+                "explore": {"subagent_eligible": True},
+                "reviewer": {"subagent_eligible": True},
+            }
+        }
+        mode = load_mode("orch", config)
+        assert mode["spawnable_modes"] == ["explore", "reviewer"]
+
+    def test_mode_with_subagent_eligible_loads_correctly(self):
+        from aloop.config import load_mode
+
+        config = {"modes": {"explore": {"subagent_eligible": True}}}
+        mode = load_mode("explore", config)
+        assert mode["subagent_eligible"] is True
+
+    def test_mode_with_can_fork_loads_correctly(self):
+        from aloop.config import load_mode
+
+        config = {"modes": {"orch": {"can_fork": True}}}
+        mode = load_mode("orch", config)
+        assert mode["can_fork"] is True
+
+    def test_load_mode_returns_subagent_fields(self):
+        from aloop.config import load_mode
+
+        config = {
+            "modes": {
+                "orch": {
+                    "subagent_eligible": True,
+                    "spawnable_modes": ["x"],
+                    "can_fork": True,
+                    "tools": ["read_file"],
+                },
+                "x": {"subagent_eligible": True},
+            }
+        }
+        mode = load_mode("orch", config)
+        # All four subagent fields preserved
+        assert mode["subagent_eligible"] is True
+        assert mode["spawnable_modes"] == ["x"]
+        assert mode["can_fork"] is True
+        assert mode["tools"] == ["read_file"]

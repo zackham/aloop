@@ -73,6 +73,9 @@ class AgentSession:
     last_active: float = field(default_factory=time.time)
     fork_from: str | None = None
     fork_turn_id: str | None = None
+    # Subagent lineage metadata. Set by the executor when a child session
+    # is spawned via the agent tool. None for normal sessions.
+    spawn_metadata: dict | None = None
 
     @property
     def session_dir(self) -> Path:
@@ -121,6 +124,7 @@ class AgentSession:
             "last_active": time.time(),
             "fork_from": self.fork_from,
             "fork_turn_id": self.fork_turn_id,
+            "spawn_metadata": self.spawn_metadata,
         }
 
         tmp_path = self.context_path.with_suffix(".tmp")
@@ -162,6 +166,7 @@ class AgentSession:
             last_active=data.get("last_active", time.time()),
             fork_from=data.get("fork_from"),
             fork_turn_id=data.get("fork_turn_id"),
+            spawn_metadata=data.get("spawn_metadata"),
         )
 
         last_compaction = data.get("last_compaction")

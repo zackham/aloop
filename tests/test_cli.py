@@ -576,3 +576,88 @@ async def test_run_once_no_events():
 
     assert result is None
     printer.flush.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Subagent CLI integration (v0.6.0)
+# ---------------------------------------------------------------------------
+
+
+def test_sessions_info_shows_spawn_metadata(tmp_path, capsys):
+    """`aloop sessions info <id>` should display spawn metadata when present."""
+    from unittest.mock import patch
+    from aloop.cli import _run_sessions
+    from aloop.session import AgentSession
+
+    with patch("aloop.session._sessions_dir", return_value=tmp_path):
+        s = AgentSession(
+            session_id="child_xyz",
+            spawn_metadata={
+                "kind": "fork",
+                "parent_session_id": "parent_abc",
+                "parent_turn_id": "t999",
+                "spawning_mode": "orchestrator",
+                "child_mode": None,
+                "timestamp": 1234567890.0,
+            },
+        )
+        s.save_context()
+
+        # Build a fake args namespace
+        args = MagicMock()
+        args.sessions_action = "info"
+        args.session_id = "child_xyz"
+
+        rc = _run_sessions(args)
+        assert rc == 0
+
+        out = capsys.readouterr().out
+        assert "spawn:" in out
+        assert "fork" in out
+        assert "parent_abc" in out
+        assert "orchestrator" in out
+
+
+def test_config_validate_catches_invalid_spawnable_modes(tmp_path, capsys):
+    """`aloop config validate` should report bad subagent config."""
+    from unittest.mock import patch
+    from aloop.cli import _run_config_validate
+
+    bad_config = {
+        "modes": {
+            "orch": {"spawnable_modes": ["nonexistent"]},
+        }
+    }
+
+    with (
+        patch("aloop.system_prompt._load_aloop_config", return_value=bad_config),
+        patch("aloop.get_project_root", return_value=tmp_path),
+    ):
+        rc = _run_config_validate()
+        assert rc == 1
+
+    out = capsys.readouterr().out
+    assert "Subagent config errors" in out
+    assert "nonexistent" in out
+
+
+def test_config_validate_catches_non_eligible_referenced_mode(tmp_path, capsys):
+    from unittest.mock import patch
+    from aloop.cli import _run_config_validate
+
+    bad_config = {
+        "modes": {
+            "orch": {"spawnable_modes": ["target"]},
+            "target": {},  # missing subagent_eligible
+        }
+    }
+
+    with (
+        patch("aloop.system_prompt._load_aloop_config", return_value=bad_config),
+        patch("aloop.get_project_root", return_value=tmp_path),
+    ):
+        rc = _run_config_validate()
+        assert rc == 1
+
+    out = capsys.readouterr().out
+    assert "subagent_eligible" in out

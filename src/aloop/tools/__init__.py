@@ -11,6 +11,7 @@ Tool sets:
 from __future__ import annotations
 
 from ..tools_base import ToolDef, ToolResult, tool
+from .agent import build_agent_tool
 from .files import edit_file_tool, read_file_tool, write_file_tool
 from .search import find_tool, grep_tool, ls_tool
 from .shell import bash_tool
@@ -44,6 +45,7 @@ __all__ = [
     "find_tool",
     "ls_tool",
     "load_skill_tool",
+    "build_agent_tool",
     "CORE_TOOLS",
     "CODING_TOOLS",
     "READONLY_TOOLS",

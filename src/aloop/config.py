@@ -37,6 +37,67 @@ def load_mode(mode_name: str, config: dict) -> dict:
     return dict(modes[mode_name])
 
 
+def validate_subagent_config(config: dict) -> list[str]:
+    """Validate spawnable_modes / subagent_eligible / can_fork consistency.
+
+    Returns a list of human-readable error messages. Empty list = valid.
+
+    Checks:
+    - Every mode listed in any spawnable_modes must exist in modes.
+    - Every mode listed in any spawnable_modes must have subagent_eligible: true.
+    - subagent_eligible must be a bool.
+    - spawnable_modes must be a list of strings.
+    - can_fork must be a bool.
+    """
+    errors: list[str] = []
+    modes = config.get("modes", {})
+    if not isinstance(modes, dict):
+        return errors
+
+    for mode_name, mode_cfg in modes.items():
+        if not isinstance(mode_cfg, dict):
+            continue
+
+        if "subagent_eligible" in mode_cfg:
+            if not isinstance(mode_cfg["subagent_eligible"], bool):
+                errors.append(
+                    f"mode {mode_name!r}: subagent_eligible must be a bool"
+                )
+
+        if "can_fork" in mode_cfg:
+            if not isinstance(mode_cfg["can_fork"], bool):
+                errors.append(
+                    f"mode {mode_name!r}: can_fork must be a bool"
+                )
+
+        sm = mode_cfg.get("spawnable_modes")
+        if sm is None:
+            continue
+        if not isinstance(sm, list) or not all(isinstance(x, str) for x in sm):
+            errors.append(
+                f"mode {mode_name!r}: spawnable_modes must be a list of strings"
+            )
+            continue
+
+        for target in sm:
+            if target not in modes:
+                errors.append(
+                    f"mode {mode_name!r}: spawnable_modes references "
+                    f"unknown mode {target!r}"
+                )
+                continue
+            target_cfg = modes[target]
+            if not isinstance(target_cfg, dict):
+                continue
+            if not target_cfg.get("subagent_eligible", False):
+                errors.append(
+                    f"mode {mode_name!r}: spawnable_modes references "
+                    f"{target!r} which is not subagent_eligible"
+                )
+
+    return errors
+
+
 def resolve_mode_system_prompt(mode_config: dict, project_root: Path | None = None) -> str | None:
     """Resolve a mode's system prompt from its config.
 
