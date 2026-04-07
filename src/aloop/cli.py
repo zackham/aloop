@@ -1357,19 +1357,29 @@ async def _run_prompt(args):
 
     from .tools import ANALYSIS_TOOLS
     from .tools.skills import load_skill_tool
-    tools = list(ANALYSIS_TOOLS)
-    if not any(t.name == "load_skill" for t in tools):
-        tools = tools + [load_skill_tool]
+    default_tools = list(ANALYSIS_TOOLS)
+    if not any(t.name == "load_skill" for t in default_tools):
+        default_tools = default_tools + [load_skill_tool]
 
     if args.tools:
+        # Explicit --tools: filter from defaults, pass as explicit override.
+        # This wins over any mode tool list.
         tool_names = {t.strip() for t in args.tools.split(",")}
-        filtered = [t for t in tools if t.name in tool_names]
+        filtered = [t for t in default_tools if t.name in tool_names]
         unknown = tool_names - {t.name for t in filtered}
         if unknown:
             sys.stderr.write(f"warning: unknown tools: {', '.join(sorted(unknown))}\n")
+        stream_kw["tools"] = filtered
         tools = filtered
-
-    stream_kw["tools"] = tools
+    elif args.mode:
+        # Mode is set without explicit --tools: let the mode's tool list take
+        # effect. Passing tools= to stream() would override the mode (since
+        # explicit tools= is treated as a full replacement). Leave it unset.
+        tools = default_tools  # used below for system prompt building only if mode doesn't set one
+    else:
+        # No mode, no explicit --tools: use defaults.
+        stream_kw["tools"] = default_tools
+        tools = default_tools
 
     # --- Resolve system prompt ---
     # When a mode is specified without explicit --system-prompt/--system-prompt-file,

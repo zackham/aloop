@@ -661,3 +661,165 @@ def test_config_validate_catches_non_eligible_referenced_mode(tmp_path, capsys):
 
     out = capsys.readouterr().out
     assert "subagent_eligible" in out
+
+
+# ---------------------------------------------------------------------------
+# CLI --mode flag should not override mode tools (regression test)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cli_mode_does_not_override_mode_tools(tmp_path, monkeypatch):
+    """Regression: `aloop run --mode foo` should NOT pass tools= to stream(),
+    so the mode's tool list takes effect. Previously the CLI hardcoded
+    tools=ANALYSIS_TOOLS, which clobbered any mode-defined tools."""
+    from unittest.mock import patch, MagicMock
+    from aloop.cli import _run_prompt
+
+    captured_kwargs = {}
+
+    class FakeBackend:
+        def __init__(self, *a, **kw):
+            pass
+        def stream(self, prompt, **kw):
+            captured_kwargs.update(kw)
+            captured_kwargs["_prompt"] = prompt
+            async def _gen():
+                from aloop.types import EventType, InferenceEvent
+                yield InferenceEvent(type=EventType.LOOP_END, data={"text": "ok"})
+            return _gen()
+
+    args = MagicMock()
+    args.subcommand = "run"
+    args.prompt = "hello"
+    args.continue_last = False
+    args.resume = None
+    args.session = "test_session"
+    args.print_mode = True  # avoid REPL
+    args.output_format = "text"
+    args.provider = None
+    args.model = "z-ai/glm-4.6"
+    args.max_iterations = 5
+    args.mode = "orchestrator"
+    args.tools = None  # IMPORTANT: no explicit --tools
+    args.system_prompt_override = None
+    args.system_prompt_file = None
+    args.no_context = False
+
+    with (
+        patch("aloop.cli.ALoop", FakeBackend),
+        patch("aloop.cli._resolve_api_key", return_value="fake-key"),
+        patch("aloop.cli._save_state"),
+        patch("sys.stdin.isatty", return_value=True),
+    ):
+        await _run_prompt(args)
+
+    # Bug: when --mode is set without --tools, stream() should NOT receive
+    # an explicit tools= kwarg. Mode resolution inside stream() handles tools.
+    assert "tools" not in captured_kwargs, (
+        f"--mode was set without --tools, but stream() got tools={captured_kwargs.get('tools')}. "
+        "This overrides the mode's tool list."
+    )
+    # Mode kwarg SHOULD be passed
+    assert captured_kwargs.get("mode") == "orchestrator"
+
+
+@pytest.mark.asyncio
+async def test_cli_explicit_tools_still_overrides(tmp_path):
+    """When --tools is explicitly set, it SHOULD override (even with --mode).
+    This is the explicit-override path; user is in control."""
+    from unittest.mock import patch, MagicMock
+    from aloop.cli import _run_prompt
+
+    captured_kwargs = {}
+
+    class FakeBackend:
+        def __init__(self, *a, **kw):
+            pass
+        def stream(self, prompt, **kw):
+            captured_kwargs.update(kw)
+            async def _gen():
+                from aloop.types import EventType, InferenceEvent
+                yield InferenceEvent(type=EventType.LOOP_END, data={"text": "ok"})
+            return _gen()
+
+    args = MagicMock()
+    args.subcommand = "run"
+    args.prompt = "hello"
+    args.continue_last = False
+    args.resume = None
+    args.session = "test_session_2"
+    args.print_mode = True
+    args.output_format = "text"
+    args.provider = None
+    args.model = "z-ai/glm-4.6"
+    args.max_iterations = 5
+    args.mode = "orchestrator"
+    args.tools = "read_file"  # explicit override
+    args.system_prompt_override = None
+    args.system_prompt_file = None
+    args.no_context = False
+
+    with (
+        patch("aloop.cli.ALoop", FakeBackend),
+        patch("aloop.cli._resolve_api_key", return_value="fake-key"),
+        patch("aloop.cli._save_state"),
+        patch("sys.stdin.isatty", return_value=True),
+    ):
+        await _run_prompt(args)
+
+    # Explicit --tools wins. tools= IS passed.
+    assert "tools" in captured_kwargs
+    tool_names = [t.name for t in captured_kwargs["tools"]]
+    assert tool_names == ["read_file"]
+
+
+@pytest.mark.asyncio
+async def test_cli_no_mode_no_tools_uses_defaults(tmp_path):
+    """No --mode and no --tools: CLI passes default tool set as before."""
+    from unittest.mock import patch, MagicMock
+    from aloop.cli import _run_prompt
+
+    captured_kwargs = {}
+
+    class FakeBackend:
+        def __init__(self, *a, **kw):
+            pass
+        def stream(self, prompt, **kw):
+            captured_kwargs.update(kw)
+            async def _gen():
+                from aloop.types import EventType, InferenceEvent
+                yield InferenceEvent(type=EventType.LOOP_END, data={"text": "ok"})
+            return _gen()
+
+    args = MagicMock()
+    args.subcommand = "run"
+    args.prompt = "hello"
+    args.continue_last = False
+    args.resume = None
+    args.session = "test_session_3"
+    args.print_mode = True
+    args.output_format = "text"
+    args.provider = None
+    args.model = "z-ai/glm-4.6"
+    args.max_iterations = 5
+    args.mode = None  # no mode
+    args.tools = None  # no tools filter
+    args.system_prompt_override = None
+    args.system_prompt_file = None
+    args.no_context = False
+
+    with (
+        patch("aloop.cli.ALoop", FakeBackend),
+        patch("aloop.cli._resolve_api_key", return_value="fake-key"),
+        patch("aloop.cli._save_state"),
+        patch("sys.stdin.isatty", return_value=True),
+    ):
+        await _run_prompt(args)
+
+    # No mode, no --tools: default ANALYSIS_TOOLS gets passed
+    assert "tools" in captured_kwargs
+    tool_names = {t.name for t in captured_kwargs["tools"]}
+    # CODING_TOOLS = read_file, write_file, edit_file, bash, load_skill
+    assert "read_file" in tool_names
+    assert "bash" in tool_names
