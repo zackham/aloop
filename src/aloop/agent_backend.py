@@ -8,6 +8,7 @@ import json
 import os
 import time
 import uuid
+from collections import OrderedDict
 from typing import Any, AsyncIterator
 
 import httpx
@@ -23,6 +24,7 @@ from .compaction import (
     should_compact,
 )
 from .config import LoopConfig, load_mode, resolve_mode_system_prompt
+from .executor import AgentExecutor, InProcessExecutor
 from .models import ModelConfig, get_model
 from .providers import ProviderConfig, get_provider, get_default_provider_name
 from .types import ModeConflictError
@@ -46,6 +48,9 @@ RETRY_DELAY = 1.0
 RETRYABLE_CODES = {429, 502, 503, 504}
 MAX_TOOL_OUTPUT = 50_000  # absolute hard cap (safety net)
 MAX_CONSECUTIVE_COMPACTION_FAILURES = 3
+# Cap for _session_modes dict so long-running parents that spawn many
+# child sessions don't leak memory. FIFO eviction once the cap is hit.
+MAX_SESSION_MODES_ENTRIES = 1000
 
 
 
@@ -58,6 +63,7 @@ class ALoop:
         provider: str | ProviderConfig | None = None,
         config: LoopConfig | None = None,
         max_retry_delay: float = 60.0,
+        executor: AgentExecutor | None = None,
         # Deprecated individual params — use config instead
         max_iterations: int | None = None,
         compaction_settings: CompactionSettings | None = None,
@@ -102,7 +108,16 @@ class ALoop:
         self.max_session_age = self.config.max_session_age
         self.max_session_messages = self.config.max_session_messages
 
-        self._session_modes: dict[str, str] = {}  # session_id -> mode_name
+        # session_id -> mode_name. Bounded FIFO so long-running parents
+        # that spawn many child sessions don't leak memory.
+        self._session_modes: "OrderedDict[str, str]" = OrderedDict()
+        # Lazily-cached project config — populated on first need so we
+        # don't reload from disk for every fork spawn.
+        self._cached_project_config: dict | None = None
+        # Lazily-cached subagent_config validation result. We log
+        # warnings the first time the agent tool is injected so users
+        # see config errors at runtime, not just via `aloop config validate`.
+        self._subagent_config_validated: bool = False
 
         # Store constructor defaults (mode overrides are per-stream-call)
         self._default_model_config = self.model_config
@@ -114,6 +129,12 @@ class ALoop:
         self._active_permissions: dict | None = None
         self._active_allowed_tools: set[str] | None = None
 
+        # Subagent state — tracked per-stream-call so the agent tool /
+        # executor can read them while a stream is running.
+        self.executor: AgentExecutor = executor or InProcessExecutor()
+        self._current_mode_name: str | None = None
+        self._current_session: AgentSession | None = None
+
         self._input_tokens = 0
         self._output_tokens = 0
         self.compaction_settings = self.config.compaction
@@ -121,6 +142,20 @@ class ALoop:
         self._last_usage: dict | None = None
         self._last_usage_index: int | None = None
         self._compaction_failures: int = 0
+
+    def _record_session_mode(self, session_id: str, mode_name: str) -> None:
+        """Record session_id -> mode_name with FIFO eviction at cap.
+
+        Long-running parents that spawn many child sessions could leak
+        memory if the dict grew unbounded. We cap at MAX_SESSION_MODES_ENTRIES
+        and evict the oldest entry on overflow.
+        """
+        if session_id in self._session_modes:
+            # Refresh ordering — most recently touched entry moves to end.
+            self._session_modes.move_to_end(session_id)
+        self._session_modes[session_id] = mode_name
+        while len(self._session_modes) > MAX_SESSION_MODES_ENTRIES:
+            self._session_modes.popitem(last=False)
 
     @property
     def cost_usd(self) -> float:
@@ -166,9 +201,15 @@ class ALoop:
         if session_id is None and session_key is not None:
             session_id = session_key
 
+        # Reset per-stream subagent state. _current_mode_name and
+        # _current_session are read by the executor / agent tool.
+        self._current_mode_name = None
+        self._current_session = None
+
         # ── Mode resolution ──────────────────────────────────────────
         # Precedence: explicit stream() kwargs > mode config > constructor defaults
         mode_config: dict = {}
+        project_config: dict = {}
         effective_model_config = self._default_model_config
         effective_provider = self._default_provider
         effective_compaction = self._default_compaction
@@ -193,7 +234,11 @@ class ALoop:
 
             # Track mode for this session
             if session_id:
-                self._session_modes[session_id] = mode
+                self._record_session_mode(session_id, mode)
+
+            # Track current mode on the instance so the agent tool /
+            # executor can read it (for spawn_metadata, fork mode label).
+            self._current_mode_name = mode
 
             # Apply mode's model (unless overridden by explicit stream kwargs —
             # we can't detect that here, so model/provider in mode only apply
@@ -288,7 +333,9 @@ class ALoop:
                 self._active_permissions = mode_perms or base_perms
         else:
             self._active_permissions = None
-        self._active_allowed_tools = {t.name for t in tools} if tools else None
+        # NOTE: _active_allowed_tools is set later after _maybe_inject_agent_tool
+        # runs (so the agent tool is included in the allowed set when it gets
+        # injected). The previous assignment here was redundant and is removed.
 
         # Apply effective config for this stream call (mode may override).
         # These are set per-call; _default_* stores the constructor values.
@@ -325,6 +372,13 @@ class ALoop:
             effective_session_id = child.session_id
             persist_session = True
             self._last_compaction = None
+
+            # Propagate parent's mode label to fork child so recursive
+            # fork-from-fork can use the same spawnable_modes config.
+            inherited_mode_name = self._session_modes.get(fork_from)
+            if inherited_mode_name and effective_session_id:
+                self._record_session_mode(effective_session_id, inherited_mode_name)
+                self._current_mode_name = inherited_mode_name
 
         elif replace_turn is not None:
             if session_id is None:
@@ -381,6 +435,27 @@ class ALoop:
 
             # Resolve the effective session_id for event tagging
             effective_session_id = session.session_id if session else session_id
+
+        # Track the live session on the instance so the executor can
+        # save_context() before forking, and so the agent tool can read
+        # the parent session id.
+        self._current_session = session
+
+        # Subagent tool injection: if the current mode opts in (via
+        # spawnable_modes or can_fork), build and inject the agent tool.
+        # This must run after fork branch (so _current_mode_name is set
+        # for fork-from-fork) and after session resolution.
+        if tools is not None:
+            self._maybe_inject_agent_tool(
+                tools_list=tools,
+                mode_config=mode_config,
+                project_config=project_config,
+            )
+        # Canonical place where _active_allowed_tools is set for this
+        # stream call. Must run AFTER _maybe_inject_agent_tool so the
+        # injected agent tool is included in the allowed set, and AFTER
+        # the tool merge above so all sources are reflected.
+        self._active_allowed_tools = {t.name for t in tools} if tools else None
 
         if prompt:
             user_msg = {"role": "user", "content": prompt}
@@ -583,6 +658,17 @@ class ALoop:
             if session:
                 session.log_message(assistant_msg)
 
+            # Save the parent's current turn to disk BEFORE running tools.
+            # This is required so that tools can fork from the parent at
+            # the current turn — fork() reads from context.json on disk.
+            if session and tool_calls:
+                try:
+                    session.messages = [m for m in messages if not m.get("_synthetic")]
+                    session.last_compaction = self._last_compaction
+                    session.save_context()
+                except OSError:
+                    pass
+
             if not tool_calls:
                 if session:
                     session.messages = [m for m in messages if not m.get("_synthetic")]
@@ -643,7 +729,13 @@ class ALoop:
                     result = ToolResult(content=f"Unknown tool: {name}", is_error=True)
                 else:
                     try:
-                        result = await self._execute_tool(tool_def, args, tool_context=tool_context)
+                        result = await self._execute_tool(
+                            tool_def,
+                            args,
+                            tool_context=tool_context,
+                            turn_id=turn_id,
+                            session_id=effective_session_id,
+                        )
                     except Exception as exc:
                         result = ToolResult(content=f"Error: {exc}", is_error=True)
 
@@ -978,12 +1070,117 @@ class ALoop:
                 result[key] = value
         return result
 
+    def _load_cached_project_config(self) -> dict:
+        """Lazily load and cache the project's .aloop config.
+
+        Avoids re-reading config from disk for every fork spawn or every
+        agent-tool injection. The cache lives for the lifetime of the
+        ALoop instance.
+        """
+        if self._cached_project_config is not None:
+            return self._cached_project_config
+
+        from .system_prompt import _load_aloop_config
+        from . import get_project_root
+
+        try:
+            self._cached_project_config = _load_aloop_config(get_project_root())
+        except (OSError, json.JSONDecodeError, KeyError):
+            self._cached_project_config = {}
+        return self._cached_project_config
+
+    def _maybe_inject_agent_tool(
+        self,
+        *,
+        tools_list: list[ToolDef],
+        mode_config: dict,
+        project_config: dict,
+    ) -> None:
+        """Inject the 'agent' tool if the current mode opts in.
+
+        Opt-in is determined by ``spawnable_modes`` or ``can_fork`` on the
+        current mode's config. For fork-inherited mode (where the child
+        stream has no explicit mode= but inherited a mode label from the
+        parent via _current_mode_name), this loads the mode_config from
+        project_config lazily.
+        """
+        from .tools.agent import build_agent_tool
+        from .config import validate_subagent_config
+
+        effective_mode_config = mode_config
+        effective_project_config = project_config
+
+        # Fork-inherited mode case: _current_mode_name was set by the
+        # fork branch but we never loaded a mode_config. Use the cached
+        # project config to look it up.
+        if self._current_mode_name and not effective_mode_config:
+            effective_project_config = self._load_cached_project_config()
+            modes_dict = effective_project_config.get("modes", {}) if isinstance(effective_project_config, dict) else {}
+            if isinstance(modes_dict, dict):
+                cfg = modes_dict.get(self._current_mode_name, {})
+                effective_mode_config = cfg if isinstance(cfg, dict) else {}
+            else:
+                effective_mode_config = {}
+
+        if not isinstance(effective_mode_config, dict):
+            return
+
+        spawnable = effective_mode_config.get("spawnable_modes") or []
+        can_fork_flag = effective_mode_config.get("can_fork", False)
+
+        if not spawnable and not can_fork_flag:
+            return
+
+        # Tool whitelist check: if mode defines tools and "agent" is not
+        # in the list (and not "*"), the user must have explicitly opted
+        # in via spawnable_modes/can_fork. Per Decision 1 Option A in the
+        # plan, opting in implies tool injection — auto-add.
+        # (We still skip if user already passed an "agent" tool.)
+        if any(t.name == "agent" for t in tools_list):
+            return
+
+        all_modes = (
+            effective_project_config.get("modes", {})
+            if isinstance(effective_project_config, dict)
+            else {}
+        )
+        if not isinstance(all_modes, dict):
+            all_modes = {}
+
+        # Runtime validation: log subagent config errors as session events
+        # the first time the agent tool is injected on this ALoop instance.
+        # Users with bad config get visibility without needing to run
+        # `aloop config validate` separately.
+        if not self._subagent_config_validated:
+            self._subagent_config_validated = True
+            try:
+                errors = validate_subagent_config(effective_project_config or {})
+            except (TypeError, AttributeError):
+                errors = []
+            if errors and self._current_session is not None:
+                for err in errors:
+                    self._current_session.log_event(
+                        "subagent_config_warning", {"error": err}
+                    )
+
+        agent_tool = build_agent_tool(
+            spawnable_modes=list(spawnable),
+            can_fork=bool(can_fork_flag),
+            all_modes=all_modes,
+            parent_loop=self,
+            executor=self.executor,
+            current_mode_name=self._current_mode_name,
+        )
+        tools_list.append(agent_tool)
+
     async def _execute_tool(
         self,
         tool_def: ToolDef,
         args: dict,
         *,
         tool_context: dict | None = None,
+        turn_id: str | None = None,
+        session_id: str | None = None,
     ) -> ToolResult:
         # Priority 0: built-in permission check (before user hooks)
         from .permissions import check_permissions, PermissionDenied
@@ -1012,7 +1209,18 @@ class ALoop:
             args = hook_result["args"]
 
         call_args = dict(args)
-        if tool_context:
+        # Build the context dict to inject into the tool's _context
+        # parameter. This always includes turn_id and session_id if
+        # known (the agent tool needs both to fork at the right point).
+        ctx_to_inject: dict | None = None
+        if tool_context or turn_id or session_id:
+            ctx_to_inject = dict(tool_context or {})
+            if turn_id is not None:
+                ctx_to_inject["turn_id"] = turn_id
+            if session_id is not None and "session_id" not in ctx_to_inject:
+                ctx_to_inject["session_id"] = session_id
+
+        if ctx_to_inject is not None:
             try:
                 sig = inspect.signature(tool_def.execute)
                 accepts_var_kwargs = any(
@@ -1020,7 +1228,7 @@ class ALoop:
                     for p in sig.parameters.values()
                 )
                 if "_context" in sig.parameters or accepts_var_kwargs:
-                    call_args["_context"] = dict(tool_context)
+                    call_args["_context"] = ctx_to_inject
             except (TypeError, ValueError):  # pragma: no cover - builtins/callables without signature
                 pass
 

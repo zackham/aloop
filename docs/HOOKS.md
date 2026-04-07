@@ -299,6 +299,38 @@ Hooks are discovered lazily on first use:
 
 If a hook file fails to import, a warning is logged and the file is skipped. Hook failures never crash the harness.
 
+## Subagents and hooks
+
+When a parent agent spawns a subagent via the `agent` tool, the child agent runs through the same hook system as the parent. Lifecycle hooks (`on_loop_start`, `on_turn_start`, etc.) fire on every child loop. Tool hooks (`before_tool`, `after_tool`) run on every child tool call. `gather_context` and `register_tools` run when the child's system prompt is built.
+
+This means a global `before_tool` hook that, for example, redacts secrets or enforces firebreaks applies uniformly to parents and children. You don't need separate hook configuration for subagents.
+
+To distinguish parent vs child execution inside a hook, look at the `_context` dict (for tool hooks) or the `context` dict (for lifecycle hooks):
+
+- `_context["session_id"]` — compare against your tracked parent session ids, or
+- Load the session via `AgentSession.load(_context["session_id"])` and check `session.spawn_metadata` — present for child sessions, `None` for parent (non-spawned) sessions.
+
+```python
+from aloop_hooks import hook
+from aloop.session import AgentSession
+
+@hook("before_tool")
+def log_subagent_writes(name, args, **ctx):
+    if name not in ("write_file", "edit_file"):
+        return None
+    sid = ctx.get("session_id")
+    if not sid:
+        return None
+    sess = AgentSession.load(sid)
+    if sess and sess.spawn_metadata:
+        kind = sess.spawn_metadata["kind"]
+        parent = sess.spawn_metadata.get("parent_session_id")
+        print(f"[{kind} child of {parent}] write to {args.get('path')}")
+    return None
+```
+
+See [Subagents](SUBAGENTS.md) for the full spawn metadata schema.
+
 ## Testing Hooks
 
 ```python

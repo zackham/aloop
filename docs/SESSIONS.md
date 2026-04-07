@@ -120,9 +120,15 @@ session.fork_turn_id    # turn forked at, or None
 session.fork_depth()    # chain depth (0 for non-forked)
 session.children()      # list of session_ids that fork from this one
 
+# Subagent lineage (set by the executor when spawned via the agent tool)
+session.spawn_metadata  # dict with kind, parent_session_id, parent_turn_id,
+                        # spawning_mode, child_mode, timestamp — or None
+
 # Full message history (walks parent chain)
 messages = session.resolve_messages()
 ```
+
+`spawn_metadata` is populated for both fork-path and fresh-path children. See [Subagents](SUBAGENTS.md) for the schema and the agent tool model.
 
 ### Materialization
 
@@ -219,6 +225,8 @@ Shows all sessions sorted by most recently active. Fork relationships are indica
   Fork depth:  0
   Children:    f8e2d1c0b9a8
 ```
+
+For child sessions spawned via the `agent` tool, `info` also prints the spawn metadata block (`spawn`, `parent`, `parent_turn`, `spawning_mode`, `child_mode`). See [Subagents](SUBAGENTS.md#spawn-metadata).
 
 ## Fork Index
 

@@ -172,6 +172,75 @@ async for event in backend.stream(
 
 See [Sessions & Forking](SESSIONS.md) for the full model — materialization, garbage collection, compaction interaction, and design rationale.
 
+### Spawning subagents
+
+The normal pattern is to define `spawnable_modes` / `can_fork` on a mode in `.aloop/config.json` and let the model invoke the auto-injected `agent` tool. For tests, scripts, or programmatic orchestration you can also call the executor directly.
+
+```python
+from aloop import ALoop, EventType, InProcessExecutor
+
+backend = ALoop(
+    model="x-ai/grok-4.1-fast",
+    api_key="sk-or-...",
+    executor=InProcessExecutor(),  # default — explicit here for clarity
+)
+```
+
+The `executor` constructor parameter accepts any `AgentExecutor` implementation. v0.6.0 ships `InProcessExecutor` only; the protocol exists so a future subprocess backend can be added without touching the agent tool.
+
+#### Fork path — child inherits parent context
+
+```python
+# 1. Run a parent stream so we have a session and a turn id
+session_id = "my-orchestrator"
+parent_turn = None
+async for event in backend.stream(
+    "Read README.md and tell me the main features.",
+    session_id=session_id,
+):
+    if event.type == EventType.LOOP_END:
+        parent_turn = event.turn_id
+
+# 2. Spawn a fork child directly via the executor
+handle = await backend.executor.spawn(
+    prompt="Now check src/aloop/__init__.py and list the public exports.",
+    mode=None,                          # fork path: omit mode
+    model=None,
+    parent_session_id=session_id,
+    parent_turn_id=parent_turn,
+    fork=True,
+    parent_loop=backend,
+)
+result = await handle.result()
+print(result.text)            # child's last assistant text
+print(result.usage)           # input_tokens, output_tokens, cost_usd, model, turns
+```
+
+Fork-path children share the parent's `ALoop` instance. Token usage rolls up into the parent's running totals; per-stream state (model, mode, session, permissions) is snapshotted before the spawn and restored after.
+
+#### Fresh path — child runs in a clean session with a target mode
+
+```python
+# Mode "reviewer" must be defined in .aloop/config.json with subagent_eligible: true
+handle = await backend.executor.spawn(
+    prompt="Read api/routes/auth.py. List any obvious input validation gaps.",
+    mode="reviewer",
+    model=None,
+    parent_session_id=None,
+    parent_turn_id=None,
+    fork=False,
+    parent_loop=backend,
+)
+result = await handle.result()
+print(result.text)
+print(result.session_id)      # the child's own session id
+print(result.spawn_kind)      # "fresh"
+```
+
+Fresh-path children get a new `ALoop` instance built from the parent's defaults but configured by the target mode's `system_prompt`, `tools`, `model`, `permissions`, and `compaction`. They inherit nothing from the parent's runtime state — brief them fully.
+
+`AgentResult`, `AgentExecutor`, `AgentExecutionHandle`, and `FORK_BOILERPLATE` are all importable from the top-level `aloop` package. See [Subagents](SUBAGENTS.md) for the full model — permission boundaries, recursive spawning, error handling, and limitations.
+
 ### PermissionDenied
 
 When a tool call is blocked by permissions, the model receives a `PermissionDenied` error (subclass of `ToolRejected`). The model can then adapt its approach.

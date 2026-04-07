@@ -342,7 +342,7 @@ class AloopAgent:
         state.mode = mode_id
 
         # Track mode on the backend's session_modes dict
-        state.backend._session_modes[session_id] = mode_id
+        state.backend._record_session_mode(session_id, mode_id)
 
         return None
 

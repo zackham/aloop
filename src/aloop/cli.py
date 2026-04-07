@@ -922,8 +922,10 @@ def _run_config_show() -> int:
 
 
 def _run_config_validate() -> int:
-    """Validate config files (JSONC parsing)."""
+    """Validate config files (JSONC parsing + subagent config consistency)."""
     import json as _json
+    from .config import validate_subagent_config
+    from .system_prompt import _load_aloop_config
     from .utils import strip_json_comments
     from . import get_project_root
 
@@ -956,8 +958,23 @@ def _run_config_validate() -> int:
             print(f"    {e}")
             errors += 1
 
+    # Subagent config validation — checks spawnable_modes references and
+    # subagent_eligible consistency. Runs on the merged project config.
+    try:
+        merged_config = _load_aloop_config(root)
+    except Exception:
+        merged_config = {}
+    sub_errors = validate_subagent_config(merged_config)
+    if sub_errors:
+        print(f"\n{_RED}Subagent config errors:{_RESET}")
+        for err in sub_errors:
+            print(f"  {_RED}-{_RESET} {err}")
+        errors += len(sub_errors)
+    else:
+        print(f"  {_GREEN}subagent config: OK{_RESET}")
+
     if errors:
-        print(f"\n{_RED}{errors} config file(s) have errors.{_RESET}")
+        print(f"\n{_RED}{errors} config error(s).{_RESET}")
         return 1
     else:
         print(f"\n{_GREEN}All config files valid.{_RESET}")
@@ -1114,6 +1131,13 @@ def _run_sessions(args) -> int:
         children = session.children()
         print(f"  {_DIM}children:{_RESET}     {', '.join(children) if children else '(none)'}")
         print(f"  {_DIM}messages:{_RESET}     {len(session.messages)} stored")
+        if session.spawn_metadata:
+            sm = session.spawn_metadata
+            print(f"  {_DIM}spawn:{_RESET}        {sm.get('kind', '?')}")
+            print(f"  {_DIM}parent:{_RESET}       {sm.get('parent_session_id') or '(none)'}")
+            print(f"  {_DIM}parent_turn:{_RESET}  {sm.get('parent_turn_id') or '(none)'}")
+            print(f"  {_DIM}spawning_mode:{_RESET} {sm.get('spawning_mode') or '(none)'}")
+            print(f"  {_DIM}child_mode:{_RESET}    {sm.get('child_mode') or '(inherited)'}")
         resolved = session.resolve_messages()
         print(f"  {_DIM}resolved:{_RESET}     {len(resolved)} total")
         if resolved:
@@ -1333,19 +1357,29 @@ async def _run_prompt(args):
 
     from .tools import ANALYSIS_TOOLS
     from .tools.skills import load_skill_tool
-    tools = list(ANALYSIS_TOOLS)
-    if not any(t.name == "load_skill" for t in tools):
-        tools = tools + [load_skill_tool]
+    default_tools = list(ANALYSIS_TOOLS)
+    if not any(t.name == "load_skill" for t in default_tools):
+        default_tools = default_tools + [load_skill_tool]
 
     if args.tools:
+        # Explicit --tools: filter from defaults, pass as explicit override.
+        # This wins over any mode tool list.
         tool_names = {t.strip() for t in args.tools.split(",")}
-        filtered = [t for t in tools if t.name in tool_names]
+        filtered = [t for t in default_tools if t.name in tool_names]
         unknown = tool_names - {t.name for t in filtered}
         if unknown:
             sys.stderr.write(f"warning: unknown tools: {', '.join(sorted(unknown))}\n")
+        stream_kw["tools"] = filtered
         tools = filtered
-
-    stream_kw["tools"] = tools
+    elif args.mode:
+        # Mode is set without explicit --tools: let the mode's tool list take
+        # effect. Passing tools= to stream() would override the mode (since
+        # explicit tools= is treated as a full replacement). Leave it unset.
+        tools = default_tools  # used below for system prompt building only if mode doesn't set one
+    else:
+        # No mode, no explicit --tools: use defaults.
+        stream_kw["tools"] = default_tools
+        tools = default_tools
 
     # --- Resolve system prompt ---
     # When a mode is specified without explicit --system-prompt/--system-prompt-file,

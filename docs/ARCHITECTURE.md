@@ -110,6 +110,17 @@ Key properties:
 
 See [Sessions & Forking](SESSIONS.md) for full details.
 
+### Subagents
+
+A mode opts in to spawning child agents via `spawnable_modes` (allowlist of fresh-path targets) and/or `can_fork: true`. When opted in, the backend auto-injects the built-in `agent` tool, which delegates work via two paths:
+
+- **Fork** — child inherits the parent's full conversation via session forking (`fork_from` + `fork_at`). Reuses the parent's `ALoop` instance; token usage rolls up into the parent.
+- **Fresh** — child runs in a new `ALoop` instance with the target mode's config (model, system prompt, tools, permissions). Independent counters; brief it fully because it has no prior context.
+
+Spawning is mediated by the `AgentExecutor` protocol; v0.6.0 ships `InProcessExecutor` as the sole implementation. Both paths persist `spawn_metadata` onto the child session for lineage tracking.
+
+See [Subagents](SUBAGENTS.md) for the full model.
+
 ## Streaming Protocol
 
 All events are `InferenceEvent(type, data, timestamp, session_id, turn_id, tool_call_id)`:
@@ -193,7 +204,9 @@ The system prompt is designed for prefix caching (automatic on OpenRouter/Anthro
 | `system_prompt.py` | Prompt builder (template + section modes), config loading, instruction/skill discovery | utils |
 | `hooks.py` | Hook discovery and execution (global + project) | system_prompt (for config) |
 | `compaction.py` | Context summarization, file restoration | models, utils |
-| `session.py` | Persistent sessions, forking, materialization, GC | compaction |
+| `session.py` | Persistent sessions, forking, materialization, GC, spawn metadata | compaction |
+| `executor.py` | `AgentExecutor` protocol, `InProcessExecutor`, `AgentExecutionHandle` — spawns fork/fresh subagents | session, agent_result, types |
+| `agent_result.py` | `AgentResult` dataclass, `FORK_BOILERPLATE`, `extract_partial_result` | — |
 | `providers.py` | Provider registry (OpenRouter, OpenAI, Ollama, etc.) | utils |
 | `models.py` | Model registry with cost tracking | utils |
 | `utils.py` | JSONC parsing (strip_json_comments, load_jsonc) | — |
@@ -204,4 +217,5 @@ The system prompt is designed for prefix caching (automatic on OpenRouter/Anthro
 | `tools/files.py` | read_file, write_file, edit_file | tools_base |
 | `tools/shell.py` | bash tool | tools_base |
 | `tools/skills.py` | load_skill tool, skill discovery (global + project, merged) | tools_base, system_prompt |
+| `tools/agent.py` | `build_agent_tool` factory — auto-injected agent tool with dynamic mode listing | tools_base, agent_result, executor |
 | `acp.py` | ACP server (Agent Client Protocol) | agent_backend, system_prompt, tools, types |
