@@ -18,12 +18,15 @@ All notable changes to aloop are documented here. Format follows [Keep a Changel
 - **`validate_subagent_config()`:** validation function called by `aloop config validate` to catch invalid `spawnable_modes` references and missing `subagent_eligible` flags.
 - **`turn_id` and `session_id` injected into `_context`:** tools that declare a `_context` parameter now receive the current `turn_id` and `session_id` automatically. The agent tool relies on this to fork at the right point.
 - **Parent session save before tool loop:** when an assistant turn produces tool calls, the parent's session is now persisted before tools run. Ensures fork-during-tool-call sees the latest turn on disk.
-- ~95 new tests (~555 total).
+- ~110 new tests (570 total).
 
 ### Changed
 - `aloop sessions info <id>` now displays spawn metadata when present.
 - `__version__` bumped to 0.6.0 (note: 0.5.0 was inadvertently shipped as 0.4.0 in `__init__.py`; this release corrects that).
 - `ALoop.__init__` accepts an optional `executor: AgentExecutor` parameter.
+
+### Fixed
+- **CLI `--mode` now respects mode's tool list.** The `aloop run` subcommand was always passing `tools=ANALYSIS_TOOLS` explicitly to `stream()`, which the agent loop treats as a full override of any mode-defined tool list. Result: `aloop run --mode foo` silently ignored `foo`'s `tools: [...]` config and gave the model the default CODING_TOOLS set, breaking the structural escalation prevention model for subagents. Bug existed since v0.4.0 (when mode-tools support landed) but only became visible after v0.6.0 added the auto-injected `agent` tool and structural permission enforcement. Fix: when `--mode` is set without an explicit `--tools`, leave `tools=` unset so the mode's tool list takes effect inside `stream()`. Explicit `--tools` still wins as an override.
 
 ## [0.5.0] - 2026-04-06
 
