@@ -42,13 +42,13 @@ aloop is a **library, not an interactive coding agent**. It's optimized for thre
 
 If your use case is one of these, aloop is built for it. If it's something else, the next section will help you find a better tool.
 
-## What aloop is NOT (and what to use instead)
+## What aloop is NOT
 
-**aloop is not an interactive terminal coding agent.** The CLI exists for scripting and ACP serving, not for sitting in a terminal typing prompts. There's no rich TUI, no `/tree` session navigator, no inline editor, no theming. If that's what you want, use **[pi-mono](https://github.com/badlogic/pi-mono)** (`@mariozechner/pi-coding-agent`) — it's a mature, well-designed interactive terminal agent with a polished TUI, 18+ provider integrations including CLI subscriptions (Claude Pro, Copilot, ChatGPT Plus, Gemini CLI), an extension system, and a much larger ecosystem. The two libraries target different problems and aren't competitive — they're complementary. aloop's contribution is the multi-agent + permissions + ACP slice that pi-mono explicitly does not address.
+**Not an interactive terminal coding agent.** No rich TUI, no `/tree` session navigator, no inline editor, no theming. The CLI exists for scripting and ACP serving. If you want a polished interactive terminal experience, [pi-mono](https://github.com/badlogic/pi-mono) is the mature choice — it targets a different problem than aloop and the two are complementary.
 
-**aloop is not Claude Code.** Claude Code is a complete product with a UI, telemetry, billing, plugin marketplace, etc. aloop is a small library you embed and extend.
+**Not a complete product.** No UI, no telemetry, no billing, no marketplace. aloop is a small library you embed and extend.
 
-**aloop is not a high-level "agent framework."** No agent classes to subclass, no orchestration DSL, no pre-baked patterns. It's an agent loop with a clean API and good extension points. You build your own abstractions on top.
+**Not a high-level "agent framework."** No agent classes to subclass, no orchestration DSL, no pre-baked patterns. It's an agent loop with a clean API and good extension points. You build your own abstractions on top.
 
 ## Comparison
 
@@ -65,7 +65,7 @@ If your use case is one of these, aloop is built for it. If it's something else,
 | System prompt control | **Full — defaults [published](docs/SYSTEM-PROMPT.md)** | Override via SYSTEM.md | Appendable | Append via AGENTS.md |
 | Maturity | v0.6.0 (recent) | v0.65.x (mature) | Stable | Stable |
 
-The honest framing: pi-mono is bigger, more mature, and has a much better solo-developer terminal experience. aloop is smaller, more focused, and addresses three things pi-mono explicitly does not: structured subagents, declarative permissions, and ACP. Pick based on what you need.
+aloop is smaller and more focused than the alternatives. The three things in bold are where it does work the others don't.
 
 ## Key Features
 
@@ -132,17 +132,17 @@ Tool sets are the primary security boundary. Path restrictions are enforced befo
 
 ### ACP server
 
-`aloop serve` speaks [ACP](https://agentclientprotocol.com) over stdio — drop-in for acpx, Zed, JetBrains, Neovim, and Stepwise:
+`aloop serve` speaks [ACP](https://agentclientprotocol.com) over stdio — drop-in for acpx, Zed, JetBrains, Neovim, and Stepwise. This is the canonical path for rich UI with aloop:
 
 ```bash
 aloop register-acpx && acpx aloop "refactor the auth module"
 ```
 
-This is the canonical path for "rich UI" with aloop. If you want an editor experience, use ACP. If you want a terminal experience, use pi-mono. See [ACP](docs/ACP.md).
+See [ACP](docs/ACP.md).
 
 ### Any model, any provider
 
-5 tested providers (OpenRouter, OpenAI, Anthropic, Google, Groq) plus any OpenAI-compatible endpoint. Add custom providers in 4 lines of JSON, validate with `aloop providers validate`. (pi-mono has more pre-baked providers including CLI subscriptions; aloop wins on "any OpenAI-compatible endpoint just works".)
+5 tested providers (OpenRouter, OpenAI, Anthropic, Google, Groq) plus any OpenAI-compatible endpoint. Add custom providers in 4 lines of JSON, validate with `aloop providers validate`.
 
 ```bash
 aloop --model x-ai/grok-4.1-fast "refactor this"
@@ -178,10 +178,6 @@ aloop system-prompt --rendered  # see exactly what the model receives
 ### Sessions with forking and compaction
 
 Persistent sessions with turn-boundary forking via parent pointers (no message duplication on disk), recursive chain walk, depth-10 auto-materialize, context compaction with circuit breaker and post-compaction file restoration. Resume with `--continue` or `--resume ID`. See [Sessions & Forking](docs/SESSIONS.md) and [Compaction](docs/COMPACTION.md).
-
-## Credit
-
-[pi-mono](https://github.com/badlogic/pi-mono) by Mario Zechner is the more mature interactive terminal agent. aloop adopted pi-mono's "tool sets ARE the security boundary" philosophy after Mario articulated it. The two libraries are complementary, not competitive.
 
 ## License
 
