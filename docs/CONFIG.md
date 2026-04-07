@@ -202,8 +202,13 @@ Named mode configs that let you switch between different configurations per sess
 | `provider` | `string` | Provider override |
 | `compaction` | `object` | Compaction settings override (`reserve_tokens`, `keep_recent_tokens`, etc.) |
 | `max_iterations` | `int` | Max agent loop iterations |
+| `subagent_eligible` | `bool` | If true, this mode can be named in another mode's `spawnable_modes` (i.e. it is a valid spawn target). Default false. |
+| `spawnable_modes` | `list[string]` | Allowlist of mode names this mode is allowed to spawn via the fresh path. Every entry must be `subagent_eligible`. Default empty. |
+| `can_fork` | `bool` | If true, this mode can spawn fork-path subagents (children that inherit its conversation context). Default false. |
 
 Available tool names: `read_file`, `write_file`, `edit_file`, `bash`, `grep`, `find`, `ls`, `load_skill`, plus any tools registered via hooks. See [Permissions](PERMISSIONS.md) for tool sets and security model.
+
+When a mode sets `spawnable_modes` or `can_fork`, the built-in `agent` tool is auto-injected — you do not need to add `"agent"` to the `tools` list. See [Subagents](SUBAGENTS.md) for the full model.
 
 ### Mode behavior
 
@@ -225,6 +230,43 @@ async for event in backend.stream("Review this", mode="review"):
 # ACP
 await agent.set_session_mode(mode_id="review", session_id=sid)
 ```
+
+### Subagent configuration
+
+A mode opts in to spawning subagents via `spawnable_modes` (allowlist of fresh-path targets) and/or `can_fork` (permission to fork the current conversation). Spawn targets must declare `subagent_eligible: true`.
+
+```jsonc
+{
+  "modes": {
+    "orchestrator": {
+      "system_prompt": "You coordinate work. Delegate via the agent tool when useful.",
+      "tools": ["read_file", "write_file", "edit_file", "bash", "load_skill"],
+      "can_fork": true,
+      "spawnable_modes": ["explore", "worker", "reviewer"]
+    },
+    "explore": {
+      "system_prompt": "Read-only codebase exploration. Report findings.",
+      "tools": ["read_file", "grep", "find", "ls"],
+      "subagent_eligible": true,
+      "spawnable_modes": ["explore"]
+    },
+    "worker": {
+      "system_prompt": "Implement focused changes. Run tests after.",
+      "tools": ["read_file", "write_file", "edit_file", "bash"],
+      "subagent_eligible": true,
+      "spawnable_modes": ["explore"]
+    },
+    "reviewer": {
+      "system_prompt": "Review code for correctness and security. Read-only.",
+      "tools": ["read_file", "grep", "find", "ls"],
+      "subagent_eligible": true,
+      "spawnable_modes": []
+    }
+  }
+}
+```
+
+In this layout `orchestrator` can fork itself or spawn any of the three workers; `worker` can only spawn `explore` (read-only helpers); `reviewer` is a leaf (can be spawned, can't spawn anything). Validate with `aloop config validate`. See [Subagents](SUBAGENTS.md) for the full reference.
 
 ## Disabling Hooks and Skills
 

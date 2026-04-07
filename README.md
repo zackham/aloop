@@ -26,6 +26,7 @@ aloop --model x-ai/grok-4.1-fast "what files are in this directory?"
 **Internals**
 - [Architecture](docs/ARCHITECTURE.md) — data flow, module map, event protocol
 - [Sessions & Forking](docs/SESSIONS.md) — persistence, branching, materialization, garbage collection
+- [Subagents](docs/SUBAGENTS.md) — fork & fresh spawn paths, `agent` tool, executor protocol
 - [File Resolution](docs/FILE-RESOLUTION.md) — discovery chains, global/project layering, merge rules
 - [Compaction](docs/COMPACTION.md) — context summarization, file restoration, circuit breaker
 
@@ -95,6 +96,10 @@ aloop --mode review "check the auth module"
 ### Sessions with forking and compaction
 
 Persistent sessions with branching at any turn, context summarization, file restoration, and circuit breaker. Fork conversations for subagent patterns or edit+rerun workflows. Resume with `--continue` or `--resume ID`. See [Sessions & Forking](docs/SESSIONS.md) and [Compaction](docs/COMPACTION.md).
+
+### Subagents
+
+Modes can opt in to spawning child agents via the auto-injected `agent` tool. Two paths: **fork** (child inherits the parent's full conversation, shares the prompt cache) and **fresh** (child runs a clean session with a different mode's model, system prompt, and tools). `spawnable_modes` is the structural permission boundary. See [Subagents](docs/SUBAGENTS.md).
 
 ### ACP server
 

@@ -169,6 +169,19 @@ from aloop import PermissionDenied, ToolRejected
 assert issubclass(PermissionDenied, ToolRejected)
 ```
 
+## Subagent permission model
+
+Subagents (children spawned via the auto-injected `agent` tool) have their own mode with their own tool whitelist. The security boundary is the **`spawnable_modes` allowlist**, declared on the parent mode in config.
+
+- Each subagent runs with its target mode's `tools`, `permissions`, `model`, and `system_prompt`. There is no inheritance from the parent's runtime permissions.
+- A mode can only spawn children whose mode names appear in its `spawnable_modes`. Every target must declare `subagent_eligible: true`.
+- A read-only mode (no `bash`, no `write_file`, no `edit_file`) can only spawn other modes that are themselves read-only by configuration. Safety is structural — you build it into the config, not into runtime checks.
+- aloop does **not** enforce "the child cannot have more privileges than the parent" at runtime. This matches Claude Code and OpenHarness, both of which pre-scope each agent type at definition time and rely on conservative definitions for safety.
+
+The practical implication: if you put a write-capable mode in a read-only mode's `spawnable_modes`, aloop will let it spawn. The validator (`aloop config validate`) will not flag this. You are responsible for keeping your `spawnable_modes` allowlists conservative.
+
+See [Subagents](SUBAGENTS.md#permission-model) for the full discussion and example configs.
+
 ## Design Philosophy
 
 - **Tool sets, not tool filtering.** Don't give an agent bash and try to make bash safe — give it different tools that are inherently safe. Inspired by [Pi](https://github.com/openclaw/openclaw)'s `codingTools` vs `readOnlyTools`.
