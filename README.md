@@ -1,6 +1,6 @@
 # aloop
 
-A provider-agnostic, embeddable agent loop. Use any LLM from any provider, extend through hooks, embed as a Python library, drive from the CLI, or expose as an ACP server.
+An embeddable Python agent loop for **multi-agent orchestration**, **declarative permissions**, and **editor integration via ACP**. Use any LLM from any provider, extend through hooks, embed as a library, drive from the CLI, or expose as an ACP server.
 
 ## Quickstart
 
@@ -30,29 +30,119 @@ aloop --model x-ai/grok-4.1-fast "what files are in this directory?"
 - [File Resolution](docs/FILE-RESOLUTION.md) — discovery chains, global/project layering, merge rules
 - [Compaction](docs/COMPACTION.md) — context summarization, file restoration, circuit breaker
 
-## Why aloop?
+## What aloop is for
 
-|  | **aloop** | Claude Agent SDK | OpenAI Agents SDK | Pydantic AI | Google ADK |
-|---|---|---|---|---|---|
-| Provider-agnostic | **5 tested, custom via JSON** | Anthropic only | OpenAI-native | Many native | Google-optimized |
-| Custom tools | **Hooks + `@tool` decorator** | MCP + plugins + hooks | Functions + MCP | Decorators + MCP | Functions + MCP + OpenAPI |
-| System prompt control | **Full — [defaults published](docs/SYSTEM-PROMPT.md)** | Appendable (replaceable in SDK) | Append via AGENTS.md | Full | Full |
-| ACP interop | **Built-in** | Community adapter | Community adapter | No | No |
-| Footprint | **~5K LOC, 2 deps** | Full product runtime | Framework + abstractions | Framework + Pydantic | Google ecosystem |
+aloop is a **library, not an interactive coding agent**. It's optimized for three specific use cases:
 
-Small, embeddable, extensible through your project — not the library.
+1. **Multi-agent orchestration with structural safety.** Spawn child agents via the built-in `agent` tool, with two paths: **fork** (child inherits parent context via session forking, shares prompt cache, can recurse) and **fresh** (child runs a clean session with a different mode's model, prompt, tools, and permissions). Permission escalation is prevented structurally via per-mode `spawnable_modes` allowlists — a read-only mode literally cannot name a write-capable mode in its allowlist. No runtime permission checks, no escalation paths. See [Subagents](docs/SUBAGENTS.md).
 
-### Who is this for?
+2. **Declarative permissions.** Tool sets and path restrictions live in `.aloop/config.json` — auditable, transparent, enforced before tool execution. Modes can swap entire tool sets (`READONLY_TOOLS`, `CODING_TOOLS`, custom). Path globs deny or allow file operations. Hardcoded safety net catches catastrophic commands. See [Permissions](docs/PERMISSIONS.md).
 
-- **Want full control over your agent?** System prompt, tools, context, compaction — everything is overridable, inspectable, and [documented](docs/SYSTEM-PROMPT.md). No black boxes.
-- **Need an open, extensible foundation?** 10 hook points, `@tool` decorator, JSONC config, named modes. Extend through your project, not the library.
-- **Integrating agents into your stack?** Python API, CLI, or [ACP](https://agentclientprotocol.com) — embed in your app, script from shell, or plug into editors and orchestrators like [Stepwise](https://github.com/zackham/stepwise).
+3. **Editor integration via ACP.** `aloop serve` speaks the [Agent Client Protocol](https://agentclientprotocol.com) over stdio — works directly with acpx, Zed, JetBrains, Neovim, and orchestrators like [Stepwise](https://github.com/zackham/stepwise). No custom adapters needed. See [ACP](docs/ACP.md).
+
+If your use case is one of these, aloop is built for it. If it's something else, the next section will help you find a better tool.
+
+## What aloop is NOT (and what to use instead)
+
+**aloop is not an interactive terminal coding agent.** The CLI exists for scripting and ACP serving, not for sitting in a terminal typing prompts. There's no rich TUI, no `/tree` session navigator, no inline editor, no theming. If that's what you want, use **[pi-mono](https://github.com/badlogic/pi-mono)** (`@mariozechner/pi-coding-agent`) — it's a mature, well-designed interactive terminal agent with a polished TUI, 18+ provider integrations including CLI subscriptions (Claude Pro, Copilot, ChatGPT Plus, Gemini CLI), an extension system, and a much larger ecosystem. The two libraries target different problems and aren't competitive — they're complementary. aloop's contribution is the multi-agent + permissions + ACP slice that pi-mono explicitly does not address.
+
+**aloop is not Claude Code.** Claude Code is a complete product with a UI, telemetry, billing, plugin marketplace, etc. aloop is a small library you embed and extend.
+
+**aloop is not a high-level "agent framework."** No agent classes to subclass, no orchestration DSL, no pre-baked patterns. It's an agent loop with a clean API and good extension points. You build your own abstractions on top.
+
+## Comparison
+
+|  | **aloop** | [pi-mono](https://github.com/badlogic/pi-mono) | Claude Agent SDK | OpenAI Agents SDK |
+|---|---|---|---|---|
+| **Built-in subagents** | **Yes — fork + fresh paths, recursive, structural permissions** | No (extension example only) | No | No |
+| **Declarative permissions** | **Yes — config-level tool sets + path restrictions** | No (extensions handle gating) | No | No |
+| **ACP server** | **Built-in** | No | Community adapter | Community adapter |
+| Interactive TUI | **No (use pi-mono)** | **Yes — rich, polished, mature** | No (terminal product) | No |
+| Provider count | 5 tested + any OpenAI-compatible | **18+, including CLI subscriptions** | Anthropic only | OpenAI-native |
+| Language | Python | TypeScript/Bun | Python/TypeScript | Python/TypeScript |
+| Codebase size | ~8.5K LOC | ~74K LOC | Full product | Framework |
+| Custom tools | `@tool` decorator + hooks | TypeScript extensions | MCP + plugins + hooks | Functions + MCP |
+| System prompt control | **Full — defaults [published](docs/SYSTEM-PROMPT.md)** | Override via SYSTEM.md | Appendable | Append via AGENTS.md |
+| Maturity | v0.6.0 (recent) | v0.65.x (mature) | Stable | Stable |
+
+The honest framing: pi-mono is bigger, more mature, and has a much better solo-developer terminal experience. aloop is smaller, more focused, and addresses three things pi-mono explicitly does not: structured subagents, declarative permissions, and ACP. Pick based on what you need.
 
 ## Key Features
 
+### Multi-agent orchestration with structural safety
+
+Modes opt in to spawning via `spawnable_modes` (allowlist of mode names this mode can spawn) and `can_fork` (whether the fork path is allowed). The `agent` tool gets auto-injected into the mode's tool set. Spawned children persist `spawn_metadata` for full lineage tracking — visible via `aloop sessions info <id>`. Recursive forking is supported (an aloop differentiator vs Claude Code's cache-coherency-driven `fork→fork` block, which doesn't apply to aloop's session-based model). See [Subagents](docs/SUBAGENTS.md).
+
+```jsonc
+{
+  "modes": {
+    "orchestrator": {
+      "tools": ["read_file", "grep", "find", "ls"],
+      "spawnable_modes": ["explore", "worker", "reviewer"],
+      "can_fork": true
+    },
+    "explore": {
+      "tools": ["read_file", "grep", "find", "ls"],
+      "subagent_eligible": true,
+      "spawnable_modes": ["explore"]
+    },
+    "worker": {
+      "tools": ["read_file", "write_file", "edit_file", "bash"],
+      "subagent_eligible": true,
+      "spawnable_modes": ["explore"]
+    },
+    "reviewer": {
+      "tools": ["read_file", "grep"],
+      "subagent_eligible": true
+    }
+  }
+}
+```
+
+A read-only mode cannot list a write-capable mode in its `spawnable_modes`. The escalation boundary is the config itself — auditable, structural, no runtime checks.
+
+### Declarative permissions
+
+Permissions live in config, not in code:
+
+```jsonc
+{
+  "permissions": {
+    "paths": {
+      "deny": [".env", "**/*.key", "**/*.pem"],
+      "allow_outside_project": false,
+      "additional_dirs": ["~/work/shared-lib"]
+    }
+  },
+  "modes": {
+    "review": {
+      "tools": ["read_file", "grep", "find", "ls"]
+    },
+    "implement": {
+      "tools": ["*"],
+      "permissions": {
+        "paths": { "write": ["src/**", "tests/**"] }
+      }
+    }
+  }
+}
+```
+
+Tool sets are the primary security boundary. Path restrictions are enforced before tool execution. A hardcoded safety net catches catastrophic commands (`rm -rf /`, fork bombs, etc.) regardless of mode. See [Permissions](docs/PERMISSIONS.md).
+
+### ACP server
+
+`aloop serve` speaks [ACP](https://agentclientprotocol.com) over stdio — drop-in for acpx, Zed, JetBrains, Neovim, and Stepwise:
+
+```bash
+aloop register-acpx && acpx aloop "refactor the auth module"
+```
+
+This is the canonical path for "rich UI" with aloop. If you want an editor experience, use ACP. If you want a terminal experience, use pi-mono. See [ACP](docs/ACP.md).
+
 ### Any model, any provider
 
-5 tested providers (OpenRouter, OpenAI, Anthropic, Google, Groq), plus any endpoint compatible with the OpenAI chat completions API. Add custom providers in 4 lines of JSON, validate with `aloop providers validate`.
+5 tested providers (OpenRouter, OpenAI, Anthropic, Google, Groq) plus any OpenAI-compatible endpoint. Add custom providers in 4 lines of JSON, validate with `aloop providers validate`. (pi-mono has more pre-baked providers including CLI subscriptions; aloop wins on "any OpenAI-compatible endpoint just works".)
 
 ```bash
 aloop --model x-ai/grok-4.1-fast "refactor this"
@@ -60,9 +150,9 @@ aloop --provider openai --model gpt-4o "explain this"
 aloop --provider ollama --model llama3 "summarize this"
 ```
 
-### Hooks — extend without forking
+### Hooks — extend without forking the library
 
-10 hook points in `.aloop/hooks/` — lifecycle, tools, context, compaction. Global (`~/.aloop/hooks/`) + project-local, both run.
+10 hook points in `.aloop/hooks/` — lifecycle, tools, context, compaction. Global (`~/.aloop/hooks/`) and project-local, both run. Add tools via the `@tool` decorator:
 
 ```python
 from aloop import tool, ToolParam
@@ -79,35 +169,19 @@ See [Hooks](docs/HOOKS.md).
 
 ### Full system prompt control
 
-No hidden instructions. Write your own prompt (template mode) or override individual sections. The [full default prompt is published](docs/SYSTEM-PROMPT.md).
+No hidden instructions. Write your own prompt (template mode) or override individual sections. The [full default prompt is published](docs/SYSTEM-PROMPT.md):
 
 ```bash
 aloop system-prompt --rendered  # see exactly what the model receives
 ```
 
-### Named modes
-
-Different system prompts, tools, models, and compaction settings per workflow — switch via CLI, Python API, or ACP.
-
-```bash
-aloop --mode review "check the auth module"
-```
-
 ### Sessions with forking and compaction
 
-Persistent sessions with branching at any turn, context summarization, file restoration, and circuit breaker. Fork conversations for subagent patterns or edit+rerun workflows. Resume with `--continue` or `--resume ID`. See [Sessions & Forking](docs/SESSIONS.md) and [Compaction](docs/COMPACTION.md).
+Persistent sessions with turn-boundary forking via parent pointers (no message duplication on disk), recursive chain walk, depth-10 auto-materialize, context compaction with circuit breaker and post-compaction file restoration. Resume with `--continue` or `--resume ID`. See [Sessions & Forking](docs/SESSIONS.md) and [Compaction](docs/COMPACTION.md).
 
-### Subagents
+## Credit
 
-Modes can opt in to spawning child agents via the auto-injected `agent` tool. Two paths: **fork** (child inherits the parent's full conversation, shares the prompt cache) and **fresh** (child runs a clean session with a different mode's model, system prompt, and tools). `spawnable_modes` is the structural permission boundary. See [Subagents](docs/SUBAGENTS.md).
-
-### ACP server
-
-`aloop serve` speaks [ACP](https://agentclientprotocol.com) over stdio — works with acpx, Zed, JetBrains, Neovim, Stepwise. See [ACP](docs/ACP.md).
-
-```bash
-aloop register-acpx && acpx aloop "refactor the auth module"
-```
+[pi-mono](https://github.com/badlogic/pi-mono) by Mario Zechner is the more mature interactive terminal agent. aloop adopted pi-mono's "tool sets ARE the security boundary" philosophy after Mario articulated it. The two libraries are complementary, not competitive.
 
 ## License
 
