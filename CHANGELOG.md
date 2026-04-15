@@ -2,6 +2,11 @@
 
 All notable changes to aloop are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.1] - 2026-04-15
+
+### Added
+- **`aloop complete` CLI subcommand** for one-shot inference from the shell. Mirrors `ALoop.complete()` with flags for model, provider, mode-based routing, system prompt, temperature, max_tokens, JSON mode, and output format. Reads prompt from positional arg or stdin; combines both when a leading instruction is paired with piped stdin. Default output is plain text (pipe-friendly); `-o json` emits a one-line blob with `text`, `input_tokens`, `output_tokens`, `cost_usd`, and `model`. For `--mode`, only the mode's `model` and (optional) `system_prompt` are consulted — tools, max_iterations, permissions, and compaction are ignored since the completion path doesn't use them.
+
 ## [0.7.0] - 2026-04-15
 
 ### Added
