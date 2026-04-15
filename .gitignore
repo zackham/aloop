@@ -23,3 +23,7 @@ htmlcov/
 # Environment
 .env
 .env.*
+
+# Stepwise orchestration artifacts (may contain secrets — NEVER commit)
+.stepwise/
+reports/

@@ -370,10 +370,13 @@ async def test_inference_error_exits_one(monkeypatch, fake_env):
 
 
 @pytest.mark.asyncio
-async def test_missing_model_errors(monkeypatch):
-    # No ALOOP_MODEL env, no --model, no --mode -> error
+async def test_missing_model_errors(monkeypatch, tmp_path):
+    # No ALOOP_MODEL env, no --model, no --mode, no config.default_model -> error.
+    # Point project root at a clean tmp dir so no stray .aloop/config.json
+    # contributes a default_model.
     monkeypatch.delenv("ALOOP_MODEL", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-key")
+    monkeypatch.setenv("ALOOP_PROJECT_ROOT", str(tmp_path))
     _patch_stdin(monkeypatch, "", tty=True)
     out, err = _capture_stdio(monkeypatch)
 
@@ -385,6 +388,74 @@ async def test_missing_model_errors(monkeypatch):
     assert rc == 1
     assert "no model specified" in err.getvalue()
     mock.assert_not_awaited()
+
+
+@pytest.fixture
+def tmp_default_model_project(tmp_path: Path, monkeypatch):
+    """Project root containing a .aloop/config.json with default_model set."""
+    aloop_dir = tmp_path / ".aloop"
+    aloop_dir.mkdir()
+    (aloop_dir / "config.json").write_text(
+        json.dumps({"default_model": "google/gemini-3.1-flash-lite-preview"})
+    )
+    monkeypatch.setenv("ALOOP_PROJECT_ROOT", str(tmp_path))
+    yield tmp_path
+
+
+@pytest.mark.asyncio
+async def test_default_model_from_config(monkeypatch, tmp_default_model_project):
+    # No --model, no --mode, no ALOOP_MODEL env → fall back to config.default_model
+    monkeypatch.delenv("ALOOP_MODEL", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-key")
+    _patch_stdin(monkeypatch, "", tty=True)
+    out, err = _capture_stdio(monkeypatch)
+
+    mock = AsyncMock(return_value=_fake_run_result(model="google/gemini-3.1-flash-lite-preview"))
+    with patch("aloop.agent_backend.ALoop.complete", mock):
+        with patch("aloop.agent_backend.ALoop.__init__", return_value=None) as init:
+            args = parse_args(["complete", "hi"])
+            rc = await _cmd_complete(args)
+
+    assert rc == 0, err.getvalue()
+    # ALoop was constructed with the config default_model
+    init_kwargs = init.call_args.kwargs
+    assert init_kwargs["model"] == "google/gemini-3.1-flash-lite-preview"
+
+
+@pytest.mark.asyncio
+async def test_env_var_wins_over_config_default(monkeypatch, tmp_default_model_project):
+    # ALOOP_MODEL env var takes precedence over config.default_model
+    monkeypatch.setenv("ALOOP_MODEL", "anthropic/claude-sonnet-4")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-key")
+    _patch_stdin(monkeypatch, "", tty=True)
+    out, err = _capture_stdio(monkeypatch)
+
+    mock = AsyncMock(return_value=_fake_run_result())
+    with patch("aloop.agent_backend.ALoop.complete", mock):
+        with patch("aloop.agent_backend.ALoop.__init__", return_value=None) as init:
+            args = parse_args(["complete", "hi"])
+            rc = await _cmd_complete(args)
+
+    assert rc == 0, err.getvalue()
+    assert init.call_args.kwargs["model"] == "anthropic/claude-sonnet-4"
+
+
+@pytest.mark.asyncio
+async def test_explicit_model_wins_over_config_default(monkeypatch, tmp_default_model_project):
+    # --model explicit flag beats everything
+    monkeypatch.delenv("ALOOP_MODEL", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-key")
+    _patch_stdin(monkeypatch, "", tty=True)
+    out, err = _capture_stdio(monkeypatch)
+
+    mock = AsyncMock(return_value=_fake_run_result())
+    with patch("aloop.agent_backend.ALoop.complete", mock):
+        with patch("aloop.agent_backend.ALoop.__init__", return_value=None) as init:
+            args = parse_args(["complete", "--model", "moonshotai/kimi-k2.5", "hi"])
+            rc = await _cmd_complete(args)
+
+    assert rc == 0, err.getvalue()
+    assert init.call_args.kwargs["model"] == "moonshotai/kimi-k2.5"
 
 
 @pytest.mark.asyncio

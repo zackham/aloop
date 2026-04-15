@@ -2,6 +2,14 @@
 
 All notable changes to aloop are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.2] - 2026-04-15
+
+### Added
+- **`default_model` config key**: `~/.aloop/config.json` (or project-level `.aloop/config.json`) now supports a `default_model` key that's consulted during CLI model resolution. Precedence is `--model` > `--mode`'s model > `ALOOP_MODEL` env var > `default_model` from merged config > error. Applies to both `aloop run` (via `_resolve_model`) and `aloop complete`. Lets you set a frequently-used model once and drop the `--model` flag from everyday invocations.
+
+### Changed
+- **`aloop config show`**: the displayed `model:` field now reflects the runtime resolution precedence (env var > config default) rather than the previous config-first ordering, so what you see matches what you get.
+
 ## [0.7.1] - 2026-04-15
 
 ### Added

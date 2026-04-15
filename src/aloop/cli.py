@@ -536,11 +536,18 @@ async def complete_once(
         mode_model = mode_cfg.get("model")
         mode_system_prompt = resolve_mode_system_prompt(mode_cfg, root)
 
-    # --- Resolve model (explicit > mode > ALOOP_MODEL env) ---
-    resolved_model = model or mode_model or os.environ.get("ALOOP_MODEL")
+    # --- Resolve model ---
+    # Precedence: --model > --mode.model > ALOOP_MODEL env > config.default_model > error
+    resolved_model = (
+        model
+        or mode_model
+        or os.environ.get("ALOOP_MODEL")
+        or _config_default_model()
+    )
     if not resolved_model:
         sys.stderr.write(
-            "error: no model specified. Use --model, --mode, or set ALOOP_MODEL.\n"
+            "error: no model specified. Use --model, --mode, set ALOOP_MODEL,\n"
+            "  or set default_model in ~/.aloop/config.json.\n"
         )
         return 1
 
@@ -741,13 +748,35 @@ def _run_update() -> int:
 # Resolve model and API key
 # ---------------------------------------------------------------------------
 
+def _config_default_model() -> str | None:
+    """Return `default_model` from merged aloop config, or None.
+
+    Reads the same merged global (~/.aloop/config.json) + project (.aloop/config.json)
+    view that mode resolution uses. Project wins over global on key collision.
+    """
+    try:
+        from .system_prompt import _load_aloop_config
+        from . import get_project_root
+        config = _load_aloop_config(get_project_root())
+    except Exception:
+        return None
+    value = config.get("default_model")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
 def _resolve_model(args) -> str:
+    # Precedence: --model > ALOOP_MODEL env > config.default_model > error
     model = args.model
     if model is None:
         model = os.environ.get("ALOOP_MODEL")
     if model is None:
+        model = _config_default_model()
+    if model is None:
         sys.stderr.write(
-            "error: no model specified. Use --model or set ALOOP_MODEL.\n"
+            "error: no model specified. Use --model, set ALOOP_MODEL, or set\n"
+            "  default_model in ~/.aloop/config.json.\n"
             "  Example: aloop --model x-ai/grok-4.1-fast \"your prompt\"\n"
             "  Any OpenRouter model ID works: https://openrouter.ai/models\n"
         )
@@ -1106,9 +1135,9 @@ def _run_config_show() -> int:
                 val = val[:77] + "..."
             print(f"    {key}: {val}")
 
-    # Provider / model
+    # Provider / model — match runtime precedence: env var > config default.
     provider_name = config.get("default_provider") or config.get("provider") or get_default_provider_name()
-    model = config.get("default_model") or os.environ.get("ALOOP_MODEL", "(not set)")
+    model = os.environ.get("ALOOP_MODEL") or config.get("default_model") or "(not set)"
     print(f"\n  {_DIM}provider:{_RESET}        {provider_name}")
     print(f"  {_DIM}model:{_RESET}           {model}")
 

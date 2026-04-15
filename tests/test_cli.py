@@ -3,6 +3,8 @@
 import io
 import json
 import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
@@ -10,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 from aloop.cli import (
     StreamPrinter, JsonStreamPrinter, SilentPrinter,
     parse_args, run_once, SUBCOMMANDS,
+    _config_default_model, _resolve_model,
 )
 from aloop.types import EventType, InferenceEvent
 
@@ -928,3 +931,65 @@ async def test_cli_no_mode_no_tools_uses_defaults(tmp_path):
     # CODING_TOOLS = read_file, write_file, edit_file, bash, load_skill
     assert "read_file" in tool_names
     assert "bash" in tool_names
+
+
+# ---------------------------------------------------------------------------
+# _resolve_model + _config_default_model — config.default_model fallback
+# ---------------------------------------------------------------------------
+
+
+def _write_project_config(tmp_path: Path, default_model: str | None = None) -> Path:
+    """Build a tmp project root with an optional default_model in config."""
+    aloop_dir = tmp_path / ".aloop"
+    aloop_dir.mkdir()
+    payload: dict = {}
+    if default_model is not None:
+        payload["default_model"] = default_model
+    (aloop_dir / "config.json").write_text(json.dumps(payload))
+    return tmp_path
+
+
+def test_resolve_model_explicit_flag_wins(monkeypatch, tmp_path):
+    _write_project_config(tmp_path, "config/default")
+    monkeypatch.setenv("ALOOP_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("ALOOP_MODEL", "env/model")
+    args = SimpleNamespace(model="flag/model")
+    assert _resolve_model(args) == "flag/model"
+
+
+def test_resolve_model_env_var_beats_config(monkeypatch, tmp_path):
+    _write_project_config(tmp_path, "config/default")
+    monkeypatch.setenv("ALOOP_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("ALOOP_MODEL", "env/model")
+    args = SimpleNamespace(model=None)
+    assert _resolve_model(args) == "env/model"
+
+
+def test_resolve_model_falls_back_to_config_default(monkeypatch, tmp_path):
+    _write_project_config(tmp_path, "config/default")
+    monkeypatch.setenv("ALOOP_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.delenv("ALOOP_MODEL", raising=False)
+    args = SimpleNamespace(model=None)
+    assert _resolve_model(args) == "config/default"
+
+
+def test_resolve_model_errors_when_nothing_set(monkeypatch, tmp_path):
+    _write_project_config(tmp_path, default_model=None)
+    monkeypatch.setenv("ALOOP_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.delenv("ALOOP_MODEL", raising=False)
+    args = SimpleNamespace(model=None)
+    with pytest.raises(SystemExit) as exc:
+        _resolve_model(args)
+    assert exc.value.code == 1
+
+
+def test_config_default_model_strips_whitespace(monkeypatch, tmp_path):
+    _write_project_config(tmp_path, "  google/gemini-3.1-flash-lite-preview  ")
+    monkeypatch.setenv("ALOOP_PROJECT_ROOT", str(tmp_path))
+    assert _config_default_model() == "google/gemini-3.1-flash-lite-preview"
+
+
+def test_config_default_model_returns_none_when_missing(monkeypatch, tmp_path):
+    _write_project_config(tmp_path, default_model=None)
+    monkeypatch.setenv("ALOOP_PROJECT_ROOT", str(tmp_path))
+    assert _config_default_model() is None

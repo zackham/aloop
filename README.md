@@ -78,7 +78,19 @@ aloop complete -m foo -o json "say hi"
 # -> {"text": "Hi!", "input_tokens": 4, "output_tokens": 2, "cost_usd": 6e-06, "model": "foo"}
 ```
 
-Model precedence: `--model` > `--mode`'s model > `ALOOP_MODEL` env var. System prompt precedence: `--system-prompt` > `--system-prompt-file` > mode's `system_prompt` > none.
+Model precedence: `--model` > `--mode`'s model > `ALOOP_MODEL` env var > `default_model` in `~/.aloop/config.json` (or project `.aloop/config.json`). System prompt precedence: `--system-prompt` > `--system-prompt-file` > mode's `system_prompt` > none.
+
+Set a default model once in config and drop the `--model` flag from everyday use:
+
+```json
+// ~/.aloop/config.json
+{ "default_model": "google/gemini-3.1-flash-lite-preview" }
+```
+
+```bash
+aloop complete "summarize: $(cat doc.txt)"   # uses the configured default
+aloop --mode coding "fix the bug"            # same for the run subcommand
+```
 
 ## Documentation
 
