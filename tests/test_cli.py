@@ -128,6 +128,111 @@ def test_parse_args_mode_flag():
     assert args.mode == "fast"
 
 
+# --- parse_args: complete subcommand ---
+
+
+def test_parse_args_complete_bare_prompt():
+    args = parse_args(["complete", "hello"])
+    assert args.subcommand == "complete"
+    assert args.prompt == "hello"
+    assert args.model is None
+    assert args.provider is None
+    assert args.mode is None
+    assert args.temperature is None
+    assert args.max_tokens is None
+    assert args.json_mode is False
+    assert args.output_format == "text"
+
+
+def test_parse_args_complete_no_prompt():
+    args = parse_args(["complete"])
+    assert args.subcommand == "complete"
+    assert args.prompt is None
+
+
+def test_parse_args_complete_model():
+    args = parse_args(["complete", "-m", "foo", "hi"])
+    assert args.subcommand == "complete"
+    assert args.model == "foo"
+    assert args.prompt == "hi"
+
+
+def test_parse_args_complete_model_long():
+    args = parse_args(["complete", "--model", "google/gemini-2.5-flash", "hi"])
+    assert args.model == "google/gemini-2.5-flash"
+
+
+def test_parse_args_complete_provider():
+    args = parse_args(["complete", "--provider", "openai", "hi"])
+    assert args.provider == "openai"
+
+
+def test_parse_args_complete_mode():
+    args = parse_args(["complete", "--mode", "media_summarize", "hi"])
+    assert args.mode == "media_summarize"
+
+
+def test_parse_args_complete_system_prompt():
+    args = parse_args(["complete", "--system-prompt", "be nice", "hi"])
+    assert args.system_prompt_override == "be nice"
+
+
+def test_parse_args_complete_system_prompt_file():
+    args = parse_args(["complete", "--system-prompt-file", "path.md", "hi"])
+    assert args.system_prompt_file == "path.md"
+
+
+def test_parse_args_complete_temperature():
+    args = parse_args(["complete", "--temperature", "0.3", "hi"])
+    assert args.temperature == 0.3
+
+
+def test_parse_args_complete_max_tokens():
+    args = parse_args(["complete", "--max-tokens", "500", "hi"])
+    assert args.max_tokens == 500
+
+
+def test_parse_args_complete_json():
+    args = parse_args(["complete", "--json", "hi"])
+    assert args.json_mode is True
+
+
+def test_parse_args_complete_output_format_json():
+    args = parse_args(["complete", "-o", "json", "hi"])
+    assert args.output_format == "json"
+
+
+def test_parse_args_complete_output_format_json_long():
+    args = parse_args(["complete", "--output-format", "json", "hi"])
+    assert args.output_format == "json"
+
+
+def test_parse_args_complete_response_format():
+    args = parse_args([
+        "complete", "--response-format", '{"type": "json_object"}', "hi",
+    ])
+    assert args.response_format == '{"type": "json_object"}'
+
+
+def test_parse_args_complete_combined():
+    args = parse_args([
+        "complete",
+        "--mode", "media_deep_dive",
+        "--system-prompt", "You are a concise analyst.",
+        "--temperature", "0.4",
+        "--max-tokens", "800",
+        "--output-format", "json",
+        "analyze this:",
+    ])
+    assert args.subcommand == "complete"
+    assert args.mode == "media_deep_dive"
+    assert args.system_prompt_override == "You are a concise analyst."
+    assert args.temperature == 0.4
+    assert args.max_tokens == 800
+    assert args.output_format == "json"
+    assert args.prompt == "analyze this:"
+
+
 # --- parse_args: other subcommands ---
 
 
@@ -205,7 +310,7 @@ def test_parse_args_system_prompt_rendered():
 
 def test_subcommands_set():
     """All expected subcommands should be in the SUBCOMMANDS set."""
-    expected = {"run", "serve", "config", "providers", "update",
+    expected = {"run", "complete", "serve", "config", "providers", "update",
                 "register-acpx", "init", "version", "system-prompt", "sessions"}
     assert SUBCOMMANDS == expected
 
