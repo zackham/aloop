@@ -951,13 +951,26 @@ class ALoop:
         """One-shot completion. No tools, no session, no hooks, no compaction.
 
         Uses the provider/model/api_key configured on this ALoop instance.
-        Returns a RunResult with text, token counts, and cost.
 
         Semantics:
           system_prompt: None or "" → no system message; "x" → sent as system message
           temperature: None → omitted (provider default); N → sent as temperature
           max_tokens: None → min(8192, model_config.max_output); N → sent as max_tokens
           response_format: None → omitted; dict → passed through (e.g. {"type": "json_object"})
+
+        Returns:
+          RunResult with text (joined streamed content), input_tokens,
+          output_tokens, cost_usd, model (the resolved model id), and
+          turns=1.
+
+        Note on cost accuracy:
+          cost_usd is computed from model_config.cost_input / cost_output
+          in the aloop registry (~/.aloop/models.json). For models not
+          registered there, costs fall back to _DEFAULT_COST_INPUT=1.0 /
+          _DEFAULT_COST_OUTPUT=3.0 per million tokens — which will not
+          match real provider pricing. Register the model via
+          ~/.aloop/models.json (or use aloop.models.save_model) for
+          accurate cost tracking.
         """
         if not self.api_key:
             raise InferenceError(
