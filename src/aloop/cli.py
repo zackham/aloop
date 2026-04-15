@@ -46,7 +46,7 @@ _STATE_FILE = Path.home() / ".aloop" / "state.json"
 
 # Known subcommands — used for implicit "run" injection
 SUBCOMMANDS = {
-    "run", "serve", "config", "providers", "update",
+    "run", "complete", "serve", "config", "providers", "update",
     "register-acpx", "init", "version", "system-prompt", "sessions",
 }
 
@@ -139,6 +139,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                             help="Skip context injection")
     run_parser.add_argument("--max-iterations", type=int, default=50,
                             help="Max agent loop iterations (default: 50)")
+
+    # --- complete ---
+    complete_parser = subparsers.add_parser(
+        "complete",
+        help="One-shot inference (no tools, no session, no agent loop)",
+    )
+    complete_parser.add_argument("prompt", nargs="?",
+                                 help="Prompt text (if omitted, read from stdin)")
+    complete_parser.add_argument("--model", "-m", default=None,
+                                 help="Model ID (e.g. google/gemini-2.5-flash)")
+    complete_parser.add_argument("--provider", default=None,
+                                 help="API provider (default: openrouter)")
+    complete_parser.add_argument("--mode", default=None,
+                                 help="Named mode from .aloop/config.json (only 'model' + 'system_prompt' are consulted)")
+    complete_parser.add_argument("--system-prompt", default=None, dest="system_prompt_override",
+                                 help="System prompt text")
+    complete_parser.add_argument("--system-prompt-file", default=None, dest="system_prompt_file",
+                                 help="Read system prompt from file")
+    complete_parser.add_argument("--temperature", type=float, default=None,
+                                 help="Sampling temperature")
+    complete_parser.add_argument("--max-tokens", type=int, default=None, dest="max_tokens",
+                                 help="Max output tokens")
+    complete_parser.add_argument("--json", action="store_true", dest="json_mode",
+                                 help="Shorthand for --response-format '{\"type\": \"json_object\"}'")
+    complete_parser.add_argument("--response-format", default=None, dest="response_format",
+                                 help="Raw response_format JSON (overrides --json)")
+    complete_parser.add_argument("--output-format", "-o", default="text",
+                                 choices=["text", "json"],
+                                 help="Output format: 'text' prints result.text; 'json' prints a one-line JSON blob")
 
     # --- serve ---
     serve_parser = subparsers.add_parser("serve", help="Run as ACP server over stdio")
@@ -464,6 +493,171 @@ async def run_once(backend, prompt, printer, **kwargs) -> dict | None:
 
     printer.flush()
     return None
+
+
+# ---------------------------------------------------------------------------
+# complete subcommand — one-shot inference (no tools, no session, no agent loop)
+# ---------------------------------------------------------------------------
+
+async def complete_once(
+    prompt: str,
+    *,
+    model: str | None,
+    provider: str | None,
+    mode: str | None,
+    system_prompt: str | None,
+    system_prompt_file: str | None,
+    temperature: float | None,
+    max_tokens: int | None,
+    response_format: dict | None,
+    output_format: str,
+) -> int:
+    """Run one ALoop.complete() call and emit the result to stdout.
+
+    Returns the intended process exit code (0 on success, 1 on error).
+    """
+    from . import get_project_root
+    from .config import load_mode, resolve_mode_system_prompt
+    from .providers import get_provider, get_default_provider_name
+    from .system_prompt import _load_aloop_config
+    from .types import InferenceError
+
+    # --- Resolve mode (for model + optional system_prompt default) ---
+    mode_model: str | None = None
+    mode_system_prompt: str | None = None
+    if mode:
+        try:
+            root = get_project_root()
+            aloop_config = _load_aloop_config(root)
+            mode_cfg = load_mode(mode, aloop_config)
+        except ValueError as e:
+            sys.stderr.write(f"error: {e}\n")
+            return 1
+        mode_model = mode_cfg.get("model")
+        mode_system_prompt = resolve_mode_system_prompt(mode_cfg, root)
+
+    # --- Resolve model (explicit > mode > ALOOP_MODEL env) ---
+    resolved_model = model or mode_model or os.environ.get("ALOOP_MODEL")
+    if not resolved_model:
+        sys.stderr.write(
+            "error: no model specified. Use --model, --mode, or set ALOOP_MODEL.\n"
+        )
+        return 1
+
+    # --- Resolve provider ---
+    provider_name = provider or get_default_provider_name()
+    try:
+        provider_cfg = get_provider(provider_name)
+    except KeyError as e:
+        sys.stderr.write(f"error: {e}\n")
+        return 1
+
+    # --- Resolve system prompt ---
+    # Precedence: explicit --system-prompt > --system-prompt-file > mode > None.
+    # Note: an explicit empty string "" wins — caller wants no system message.
+    if system_prompt is not None:
+        sys_prompt: str | None = system_prompt
+    elif system_prompt_file is not None:
+        sp_path = Path(system_prompt_file)
+        if not sp_path.exists():
+            sys.stderr.write(f"error: system prompt file not found: {sp_path}\n")
+            return 1
+        sys_prompt = sp_path.read_text(encoding="utf-8")
+    elif mode_system_prompt is not None:
+        sys_prompt = mode_system_prompt
+    else:
+        sys_prompt = None
+
+    # --- Build ALoop instance ---
+    try:
+        aloop_instance = ALoop(model=resolved_model, provider=provider_cfg)
+    except Exception as e:
+        sys.stderr.write(f"error: {e}\n")
+        return 1
+
+    # --- Run completion ---
+    try:
+        result = await aloop_instance.complete(
+            prompt,
+            system_prompt=sys_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+        )
+    except InferenceError as e:
+        sys.stderr.write(f"error: {e}\n")
+        return 1
+    except Exception as e:
+        sys.stderr.write(f"error: {e}\n")
+        return 1
+
+    # --- Emit result ---
+    if output_format == "json":
+        payload = {
+            "text": result.text,
+            "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens,
+            "cost_usd": result.cost_usd,
+            "model": result.model,
+        }
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    else:
+        sys.stdout.write(result.text)
+        if result.text and not result.text.endswith("\n"):
+            sys.stdout.write("\n")
+
+    return 0
+
+
+async def _cmd_complete(args) -> int:
+    """Entry point for the `complete` subcommand.
+
+    Handles stdin detection + prompt assembly, then calls complete_once().
+    """
+    positional = args.prompt
+    stdin_is_tty = sys.stdin.isatty()
+
+    stdin_content: str = ""
+    if not stdin_is_tty:
+        stdin_content = sys.stdin.read()
+
+    # --- Assemble prompt ---
+    if positional and not stdin_is_tty and stdin_content.strip():
+        # Combine leading instruction + piped body
+        prompt = f"{positional}\n\n{stdin_content.rstrip()}"
+    elif positional:
+        prompt = positional
+    elif not stdin_is_tty and stdin_content.strip():
+        prompt = stdin_content.rstrip()
+    else:
+        sys.stderr.write(
+            "error: no prompt provided (give a positional arg or pipe stdin)\n"
+        )
+        return 1
+
+    # --- Resolve response_format ---
+    response_format: dict | None = None
+    if args.response_format:
+        try:
+            response_format = json.loads(args.response_format)
+        except json.JSONDecodeError as e:
+            sys.stderr.write(f"error: --response-format is not valid JSON: {e}\n")
+            return 1
+    elif args.json_mode:
+        response_format = {"type": "json_object"}
+
+    return await complete_once(
+        prompt,
+        model=args.model,
+        provider=args.provider,
+        mode=args.mode,
+        system_prompt=args.system_prompt_override,
+        system_prompt_file=args.system_prompt_file,
+        temperature=args.temperature,
+        max_tokens=args.max_tokens,
+        response_format=response_format,
+        output_format=args.output_format,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1281,6 +1475,11 @@ async def main():
     if subcmd == "sessions":
         sys.exit(_run_sessions(args))
         return
+
+    # --- complete (one-shot, no tools/session/agent loop) ---
+    if subcmd == "complete":
+        exit_code = await _cmd_complete(args)
+        sys.exit(exit_code)
 
     # --- run (default) ---
     if subcmd == "run":
