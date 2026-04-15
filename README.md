@@ -44,6 +44,42 @@ result = await aloop.complete(
 
 `complete()` uses the same provider/model/registry resolution as `stream()` and `run()`.
 
+### From the CLI
+
+The `aloop complete` subcommand exposes `ALoop.complete()` from the shell — one-shot inference with no tools, no session, no agent loop. Pipe-friendly by default.
+
+```bash
+# Basic — prompt as positional
+aloop complete --model google/gemini-2.5-flash "summarize: hello world"
+
+# Pipe stdin as the prompt
+cat article.txt | aloop complete -m google/gemini-2.5-flash
+
+# Combine a leading instruction with piped stdin
+cat article.txt | aloop complete -m google/gemini-2.5-flash "summarize this:"
+# -> prompt becomes "summarize this:\n\n<article content>"
+
+# Mode-based model resolution (reads only model + optional system_prompt
+# from .aloop/config.json modes.<name>; tools/permissions/compaction ignored)
+aloop complete --mode media_summarize "summarize: $(cat article.txt)"
+
+# System prompt
+aloop complete -m foo --system-prompt "You are a professional translator." "Translate: hello"
+aloop complete -m foo --system-prompt-file prompt.md "..."
+
+# Inference params
+aloop complete -m foo --temperature 0.3 --max-tokens 500 "write a haiku"
+
+# JSON mode (response_format={"type": "json_object"})
+aloop complete -m foo --json "list 3 colors as JSON"
+
+# Structured output: one-line JSON blob with text, tokens, cost, model
+aloop complete -m foo -o json "say hi"
+# -> {"text": "Hi!", "input_tokens": 4, "output_tokens": 2, "cost_usd": 6e-06, "model": "foo"}
+```
+
+Model precedence: `--model` > `--mode`'s model > `ALOOP_MODEL` env var. System prompt precedence: `--system-prompt` > `--system-prompt-file` > mode's `system_prompt` > none.
+
 ## Documentation
 
 **Usage**
