@@ -187,3 +187,31 @@ async def test_passthrough_to_stream_completion():
     assert captured["response_format"] == {"type": "json_object"}
     assert captured["tools"] is None
     assert captured["messages"] == [{"role": "user", "content": "hi"}]
+
+
+# ---------------------------------------------------------------------------
+# Multi-provider passthrough — confirms provider resolution flows through
+# complete() for every built-in tested provider. Mock-only; no network.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("provider_name", ["openrouter", "openai", "anthropic", "google", "groq"])
+async def test_complete_works_with_provider(provider_name):
+    backend = ALoop(
+        model="some-model-id",
+        provider=provider_name,
+        api_key="test-key",
+    )
+    assert backend.provider.name is not None
+    # Provider name on ProviderConfig is the human label; the registry key
+    # lookup is what we care about — confirm get_provider(name) resolved.
+    from aloop.providers import get_provider
+    assert backend.provider is get_provider(provider_name)
+
+    with patch.object(backend, "_stream_completion", side_effect=_simple_stream):
+        result = await backend.complete("hi")
+
+    assert result.text == "Hello world"
+    assert result.input_tokens == 100
+    assert result.output_tokens == 50
+    assert result.turns == 1
+    assert result.model == backend.model_config.id
