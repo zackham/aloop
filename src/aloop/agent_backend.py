@@ -939,6 +939,65 @@ class ALoop:
 
         return result or RunResult(text="")
 
+    async def complete(
+        self,
+        prompt: str,
+        *,
+        system_prompt: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        response_format: dict | None = None,
+    ) -> RunResult:
+        """One-shot completion. No tools, no session, no hooks, no compaction.
+
+        Uses the provider/model/api_key configured on this ALoop instance.
+        Returns a RunResult with text, token counts, and cost.
+
+        Semantics:
+          system_prompt: None or "" → no system message; "x" → sent as system message
+          temperature: None → omitted (provider default); N → sent as temperature
+          max_tokens: None → min(8192, model_config.max_output); N → sent as max_tokens
+          response_format: None → omitted; dict → passed through (e.g. {"type": "json_object"})
+        """
+        if not self.api_key:
+            raise InferenceError(
+                f"{self.provider.env_key or 'API key'} is not configured"
+            )
+
+        sys_prompt = system_prompt if system_prompt else None
+        messages = [{"role": "user", "content": prompt}]
+        text_parts: list[str] = []
+        usage: dict = {}
+
+        async for chunk in self._stream_completion(
+            messages, sys_prompt, tools=None,
+            response_format=response_format,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        ):
+            ctype = chunk.get("type")
+            if ctype == "text":
+                text_parts.append(chunk.get("text", ""))
+            elif ctype == "usage":
+                usage = chunk.get("usage") or {}
+            elif ctype == "error":
+                raise InferenceError(chunk.get("message", "inference error"))
+
+        input_tokens = int(usage.get("prompt_tokens") or 0)
+        output_tokens = int(usage.get("completion_tokens") or 0)
+        cost = (
+            (input_tokens / 1_000_000) * self.model_config.cost_input
+            + (output_tokens / 1_000_000) * self.model_config.cost_output
+        )
+        return RunResult(
+            text="".join(text_parts),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost,
+            model=self.model_config.id,
+            turns=1,
+        )
+
     def _resolve_session(
         self,
         session_id: str | None = None,
@@ -1262,6 +1321,9 @@ class ALoop:
         system_prompt: str | None,
         tools: list[dict] | None,
         response_format: dict | None = None,
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[dict]:
         payload: dict[str, Any] = {
             "model": self.model_config.id,
@@ -1271,8 +1333,11 @@ class ALoop:
             ),
             "stream": True,
             "stream_options": {"include_usage": True},
-            "max_tokens": min(8192, self.model_config.max_output),
+            "max_tokens": max_tokens if max_tokens is not None else min(8192, self.model_config.max_output),
         }
+
+        if temperature is not None:
+            payload["temperature"] = temperature
 
         if response_format:
             payload["response_format"] = response_format

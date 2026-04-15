@@ -2,6 +2,12 @@
 
 All notable changes to aloop are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.0] - 2026-04-15
+
+### Added
+- **`ALoop.complete()`:** one-shot completion method for prompt → text without the agent loop. No tools, no session, no hooks, no compaction. Uses the same provider/model/api_key configuration as `stream()` and `run()`. Returns a `RunResult` with text, token counts, and cost.
+- **`_stream_completion` overrides:** optional keyword-only `temperature` and `max_tokens` parameters. Used internally by `complete()` — existing callers unaffected.
+
 ## [0.6.0] - 2026-04-06
 
 ### Added
