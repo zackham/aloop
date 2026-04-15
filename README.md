@@ -9,6 +9,41 @@ uv tool install git+https://github.com/zackham/aloop.git
 aloop --model x-ai/grok-4.1-fast "what files are in this directory?"
 ```
 
+## One-shot completions
+
+Use `complete()` when you need prompt → text without the agent loop (no tools, sessions, hooks, or compaction). For tool-using agents, use `run()` or `stream()`.
+
+```python
+from aloop import ALoop
+
+aloop = ALoop(model="anthropic/claude-sonnet-4-20250514", api_key="...")
+
+# Basic completion
+result = await aloop.complete("Summarize this:\n\n" + text)
+print(result.text)
+
+# With system prompt
+result = await aloop.complete(
+    "Translate to French: Hello world",
+    system_prompt="You are a professional translator.",
+)
+
+# With temperature and max_tokens
+result = await aloop.complete(
+    "Write a haiku about coding",
+    temperature=0.9,
+    max_tokens=100,
+)
+
+# JSON mode
+result = await aloop.complete(
+    "List 3 colors as JSON",
+    response_format={"type": "json_object"},
+)
+```
+
+`complete()` uses the same provider/model/registry resolution as `stream()` and `run()`.
+
 ## Documentation
 
 **Usage**
@@ -178,41 +213,6 @@ aloop system-prompt --rendered  # see exactly what the model receives
 ### Sessions with forking and compaction
 
 Persistent sessions with turn-boundary forking via parent pointers (no message duplication on disk), recursive chain walk, depth-10 auto-materialize, context compaction with circuit breaker and post-compaction file restoration. Resume with `--continue` or `--resume ID`. See [Sessions & Forking](docs/SESSIONS.md) and [Compaction](docs/COMPACTION.md).
-
-### One-shot completions
-
-Use `complete()` when you need prompt → text without the agent loop (no tools, sessions, hooks, or compaction). For tool-using agents, use `run()` or `stream()`.
-
-```python
-from aloop import ALoop
-
-aloop = ALoop(model="anthropic/claude-sonnet-4-20250514", api_key="...")
-
-# Basic completion
-result = await aloop.complete("Summarize this:\n\n" + text)
-print(result.text)
-
-# With system prompt
-result = await aloop.complete(
-    "Translate to French: Hello world",
-    system_prompt="You are a professional translator.",
-)
-
-# With temperature and max_tokens
-result = await aloop.complete(
-    "Write a haiku about coding",
-    temperature=0.9,
-    max_tokens=100,
-)
-
-# JSON mode
-result = await aloop.complete(
-    "List 3 colors as JSON",
-    response_format={"type": "json_object"},
-)
-```
-
-`complete()` uses the same provider/model/registry resolution as `stream()` and `run()`.
 
 ## License
 
