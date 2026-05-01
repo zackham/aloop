@@ -525,8 +525,23 @@ class AloopAgent:
 
         except asyncio.CancelledError:
             return "cancelled"
-        except Exception:
+        except Exception as exc:
             log.exception("Error streaming in session %s", session_id)
+            # Surface the error through ACP so the caller sees it
+            # instead of a silent end_turn with 0 tokens
+            try:
+                if conn is not None:
+                    await conn.session_update(
+                        session_id=session_id,
+                        update=update_agent_message_text(
+                            f"\n\n[aloop error] {exc}",
+                        ),
+                    )
+            except Exception:
+                pass  # Best-effort; the log.exception above is the primary record
+            # Also write to stderr so stepwise's stderr capture picks it up
+            import sys as _sys
+            print(f"aloop _stream_to_acp error: {exc}", file=_sys.stderr)
             return "end_turn"
 
         return "end_turn"
