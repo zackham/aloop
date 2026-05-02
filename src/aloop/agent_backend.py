@@ -155,6 +155,27 @@ class ALoop:
         self._thinking: str | None = thinking
         self._reasoning_effort: str | None = reasoning_effort
 
+    @staticmethod
+    def _resolve_provider_api_key(provider: ProviderConfig) -> str:
+        """Resolve api_key for a provider: env var → credentials file → ''.
+
+        Used when a mode swaps the provider mid-flight; the constructor's
+        api_key may not match the new provider.
+        """
+        if not provider.env_key:
+            return ""
+        key = os.environ.get(provider.env_key, "")
+        if key:
+            return key
+        # Fall back to credentials file (key may be stored under env_key name).
+        cred_path = os.path.expanduser("~/.aloop/credentials.json")
+        try:
+            with open(cred_path) as f:
+                creds = json.load(f)
+            return creds.get(provider.env_key, creds.get("api_key", "")) or ""
+        except (OSError, json.JSONDecodeError):
+            return ""
+
     def _record_session_mode(self, session_id: str, mode_name: str) -> None:
         """Record session_id -> mode_name with FIFO eviction at cap.
 
@@ -360,6 +381,14 @@ class ALoop:
         self.provider = effective_provider
         self.compaction_settings = effective_compaction
         self.max_iterations = effective_max_iterations
+
+        # If mode swapped the provider, re-resolve the api_key against the
+        # new provider's env_key / credentials file. Otherwise a constructor
+        # api_key (e.g. OpenRouter's) bleeds into a different provider's call.
+        if effective_provider is not self._default_provider:
+            new_key = self._resolve_provider_api_key(effective_provider)
+            if new_key:
+                self.api_key = new_key
 
         # Reasoning controls — precedence: per-call kwarg > mode > constructor.
         # `or`-chain works because None is the only falsy value we accept;

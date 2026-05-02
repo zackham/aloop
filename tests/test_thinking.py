@@ -382,6 +382,37 @@ async def test_mode_thinking_propagates_to_request(tmp_path, monkeypatch):
     assert captured["reasoning_effort"] == "max"
 
 
+async def test_mode_provider_swap_reresolves_api_key(tmp_path, monkeypatch):
+    """When a mode swaps the provider, the api_key must re-resolve.
+
+    Otherwise the constructor's api_key (typically OpenRouter's) bleeds into
+    the new provider's calls and authentication fails.
+    """
+    config = tmp_path / ".aloop"
+    config.mkdir()
+    config_file = config / "config.json"
+    config_file.write_text(
+        '{"modes": {"deepseek-pro": {"provider": "deepseek", "model": "deepseek-v4-pro"}}}'
+    )
+    monkeypatch.setenv("ALOOP_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key-xyz")
+
+    # Construct with openrouter (default) and an OpenRouter-shaped key.
+    backend = ALoop(model="anthropic/claude-sonnet-4-6", api_key="sk-or-original",
+                    provider="openrouter")
+    assert backend.api_key == "sk-or-original"
+
+    captured: dict = {}
+    with patch.object(backend, "_stream_completion",
+                      side_effect=_make_payload_capturing_completion(captured)):
+        async for _ in backend.stream("hi", mode="deepseek-pro", persist_session=False):
+            pass
+
+    # After mode-driven provider swap, api_key must reflect DeepSeek's env key.
+    assert backend.api_key == "ds-key-xyz"
+    assert backend.provider.env_key == "DEEPSEEK_API_KEY"
+
+
 async def test_per_call_kwargs_override_mode_thinking(tmp_path, monkeypatch):
     """Explicit per-call thinking wins over mode-config thinking."""
     config = tmp_path / ".aloop"
