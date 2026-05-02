@@ -70,6 +70,13 @@ PROVIDERS: dict[str, ProviderConfig] = {
         status="tested",
         notes="Fast inference. Model IDs: llama-3.3-70b-versatile, meta-llama/llama-4-scout-17b-16e-instruct, etc.",
     ),
+    "deepseek": ProviderConfig(
+        name="DeepSeek",
+        base_url="https://api.deepseek.com/v1/chat/completions",
+        env_key="DEEPSEEK_API_KEY",
+        status="tested",
+        notes="DeepSeek direct API (OpenAI-compat). Model IDs: deepseek-v4-pro, deepseek-v4-flash. Both support 1M context, tool calling, and thinking mode (controlled via the thinking and reasoning_effort kwargs).",
+    ),
     "together": ProviderConfig(
         name="Together AI",
         base_url="https://api.together.xyz/v1/chat/completions",

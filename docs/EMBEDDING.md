@@ -39,6 +39,8 @@ ALoop(
     model="x-ai/grok-4.1-fast",      # any model ID (required)
     api_key="sk-or-...",               # or set via env var
     provider="openrouter",             # provider name or ProviderConfig
+    thinking="enabled",                # optional — DeepSeek V4 etc.
+    reasoning_effort="high",           # optional — "high" or "max"
     config=LoopConfig(
         max_iterations=50,
         max_session_age=14400.0,
@@ -71,6 +73,8 @@ async for event in backend.stream(
     inject_context=True,                     # optional, runs gather_context hooks (default True)
     persist_session=True,                    # optional, set False to disable persistence
     response_format={"type": "json_object"}, # optional, for structured output
+    thinking="enabled",                      # optional, "enabled"/"disabled" — overrides mode/constructor
+    reasoning_effort="max",                  # optional, "high"/"max" — overrides mode/constructor
     context={"user_id": "abc123"},           # optional, forwarded to hooks
     fork_from="parent_session_id",           # optional, fork from another session
     fork_at="turn_005",                      # optional, turn_id to fork at (default: last turn)
@@ -274,7 +278,9 @@ Every event from `stream()` is an `InferenceEvent(type, data, timestamp, session
 | `LOOP_START` | `{"session_id": "...", "model": "...", "provider": "..."}` | Loop begins (before first turn) |
 | `TURN_START` | `{"iteration": 0, "turn_id": "..."}` | Agent loop iteration begins |
 | `TEXT_DELTA` | `{"text": "..."}` | Model produces text (streaming) |
-| `THINKING_DELTA` | `{"text": "..."}` | Model thinking/reasoning output |
+| `THINKING_START` | `{}` | Reasoning channel opens (first reasoning delta of the turn) |
+| `THINKING_DELTA` | `{"text": "..."}` | Streaming reasoning tokens |
+| `THINKING_END` | `{}` | Reasoning channel closes (text/tool delta arrives or stream ends) |
 | `TOOL_START` | `{"name": "bash", "id": "call_1", "args": {"command": "ls"}}` | Model requests a tool call |
 | `TOOL_DELTA` | `{"name": "bash", "id": "call_1", "output": "..."}` | Streaming tool output (bash) |
 | `TOOL_END` | `{"name": "bash", "id": "call_1", "result": "...", "is_error": false}` | Tool execution complete |

@@ -53,6 +53,14 @@ class InferenceEvent:
         return InferenceEvent(EventType.THINKING_DELTA, {"text": delta})
 
     @staticmethod
+    def thinking_start() -> "InferenceEvent":
+        return InferenceEvent(EventType.THINKING_START, {})
+
+    @staticmethod
+    def thinking_end() -> "InferenceEvent":
+        return InferenceEvent(EventType.THINKING_END, {})
+
+    @staticmethod
     def tool_start(
         name: str,
         tool_call_id: str,

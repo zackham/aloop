@@ -205,6 +205,8 @@ Named mode configs that let you switch between different configurations per sess
 | `subagent_eligible` | `bool` | If true, this mode can be named in another mode's `spawnable_modes` (i.e. it is a valid spawn target). Default false. |
 | `spawnable_modes` | `list[string]` | Allowlist of mode names this mode is allowed to spawn via the fresh path. Every entry must be `subagent_eligible`. Default empty. |
 | `can_fork` | `bool` | If true, this mode can spawn fork-path subagents (children that inherit its conversation context). Default false. |
+| `thinking` | `"enabled"` \| `"disabled"` | Reasoning toggle for thinking-capable models (e.g. DeepSeek V4). Omit to use the provider's server default. |
+| `reasoning_effort` | `"high"` \| `"max"` | Reasoning effort level. Only applies when thinking is enabled. |
 
 Available tool names: `read_file`, `write_file`, `edit_file`, `bash`, `grep`, `find`, `ls`, `load_skill`, plus any tools registered via hooks. See [Permissions](PERMISSIONS.md) for tool sets and security model.
 
@@ -331,6 +333,51 @@ Global compaction thresholds via `~/.aloop/compaction.json`:
   "reserve_tokens": 16384,
   "keep_recent_tokens": 20000,
   "compact_instructions": "Preserve all error messages and stack traces."
+}
+```
+
+## Reasoning / thinking mode
+
+Thinking-capable providers (DeepSeek V4 today) support an optional reasoning channel — the model emits a chain of thought before its final answer. aloop exposes two knobs:
+
+- **`thinking`**: `"enabled"` | `"disabled"` | omitted (server default)
+- **`reasoning_effort`**: `"high"` | `"max"` | omitted (server default)
+
+Both knobs travel via three independent channels, with this precedence:
+
+1. **Per-call kwarg** — `stream(thinking="enabled", reasoning_effort="max", ...)` or `complete(thinking="disabled", ...)`
+2. **Mode config** — `thinking` and `reasoning_effort` fields on a mode in `.aloop/config.json`
+3. **Constructor default** — `ALoop(thinking="enabled", reasoning_effort="high", ...)`
+4. Otherwise, the provider's server default applies (DeepSeek defaults to thinking-enabled at high effort).
+
+When thinking is active, the model's reasoning streams to the caller as `THINKING_START` → `THINKING_DELTA` → `THINKING_END` events on `stream()`. The CLI `text` formatter renders thinking dimmed inside a labeled box; `stream-json` emits `thinking_*` events; ACP clients render them as agent thought chunks.
+
+### Persistence note
+
+Some providers (DeepSeek among them) require that prior reasoning be echoed back on subsequent turns of a multi-turn conversation. aloop persists `reasoning_content` on assistant messages automatically, so this is handled transparently by `stream()` / `run()`. Other OpenAI-compatible providers ignore the field.
+
+```jsonc
+// example modes
+{
+  "modes": {
+    "deepseek-flash": {
+      "provider": "deepseek",
+      "model": "deepseek-v4-flash",
+      "thinking": "disabled"
+    },
+    "deepseek-pro": {
+      "provider": "deepseek",
+      "model": "deepseek-v4-pro",
+      "thinking": "enabled",
+      "reasoning_effort": "high"
+    },
+    "deepseek-pro-max": {
+      "provider": "deepseek",
+      "model": "deepseek-v4-pro",
+      "thinking": "enabled",
+      "reasoning_effort": "max"
+    }
+  }
 }
 ```
 

@@ -2,6 +2,27 @@
 
 All notable changes to aloop are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.8.0] - 2026-05-02
+
+### Added
+- **DeepSeek provider (`deepseek`)**: built-in tested provider for DeepSeek's direct API at `https://api.deepseek.com/v1/chat/completions`. Auth via `DEEPSEEK_API_KEY`. Supports v4 model IDs (`deepseek-v4-pro`, `deepseek-v4-flash`), 1M context, tool calling, and thinking mode. Use it via `--provider deepseek` or set as default in config.
+- **Reasoning / thinking mode controls**: first-class support for thinking-capable models. New `thinking` (`enabled` / `disabled`) and `reasoning_effort` (`high` / `max`) parameters work everywhere:
+  - **`ALoop` constructor**: `ALoop(thinking="enabled", reasoning_effort="max", ...)` for instance-wide defaults.
+  - **`stream()` / `run()` / `complete()`**: per-call kwargs that override the constructor default.
+  - **Mode config**: `.aloop/config.json` modes can declare `thinking` and `reasoning_effort` fields. Per-call kwargs win, then mode, then constructor default.
+  - **CLI flags**: `--thinking enabled|disabled` and `--reasoning-effort high|max` on `aloop run` and `aloop complete`.
+  - Sent top-level on the request payload (`{"thinking": {"type": "enabled"}, "reasoning_effort": "max"}`); ignored by providers that don't recognize the fields.
+- **Thinking event stream**: when a provider emits `reasoning_content` (DeepSeek) or `reasoning` (OpenRouter) deltas, aloop now wraps them in `THINKING_START` → `THINKING_DELTA`(s) → `THINKING_END` events on the `stream()` iterator. ACP clients (Zed, Stepwise) already render these as agent thought chunks. The CLI text formatter shows thinking dimmed inside a labeled box; the stream-json formatter emits `thinking_start` / `thinking_delta` / `thinking_end` events.
+- **Reasoning round-trip**: assistant messages now persist `reasoning_content` (when present) into the conversation history. Required by DeepSeek's contract — when thinking is enabled, prior reasoning must be echoed back on subsequent turns. Other OpenAI-compatible providers ignore the field.
+- **CLI printer hooks**: `on_thinking_start`, `on_thinking_delta`, `on_thinking_end` on `StreamPrinter`, `JsonStreamPrinter`, and `SilentPrinter`.
+
+### Changed
+- `_stream_completion` now accepts `thinking` and `reasoning_effort` keyword arguments. Backward compatible — existing callers unaffected.
+
+### Tests
+- 12 new tests covering the thinking-mode surface (event emission, kwarg propagation, mode plumbing, payload shape, reasoning_content delta parsing, multi-turn round-trip).
+- DeepSeek added to multi-provider passthrough parametrize.
+
 ## [0.7.2] - 2026-04-15
 
 ### Added

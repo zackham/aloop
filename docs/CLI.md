@@ -225,6 +225,24 @@ Options:
   --tools NAMES                  Comma-separated tool names (filters built-in tools)
   --no-context                   Skip gather_context hook injection
   --max-iterations N             Max agent loop iterations (default: 50)
+  --thinking enabled|disabled    Reasoning toggle (DeepSeek V4 etc.)
+  --reasoning-effort high|max    Reasoning effort level
+```
+
+## Reasoning / thinking flags
+
+For thinking-capable models (DeepSeek V4 today), `--thinking` and `--reasoning-effort` map straight to the request payload. They work on both `aloop run` and `aloop complete`. Per-call flags override mode config and constructor defaults.
+
+```bash
+# Visible thinking stream, max effort
+aloop --provider deepseek --model deepseek-v4-pro \
+  --thinking enabled --reasoning-effort max "design a sharded queue with at-most-once semantics"
+
+# Same model, fast / cheap path
+aloop --provider deepseek --model deepseek-v4-flash --thinking disabled "what's 2+2?"
+
+# Mode bakes the knobs in
+aloop --mode deepseek-pro-max "..."
 ```
 
 ## Modes

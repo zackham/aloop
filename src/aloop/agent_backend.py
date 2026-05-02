@@ -64,6 +64,11 @@ class ALoop:
         config: LoopConfig | None = None,
         max_retry_delay: float = 60.0,
         executor: AgentExecutor | None = None,
+        # Reasoning controls — sent on every request unless overridden per-call.
+        # `thinking`: "enabled" | "disabled" | None (server default).
+        # `reasoning_effort`: "high" | "max" | None (server default).
+        thinking: str | None = None,
+        reasoning_effort: str | None = None,
         # Deprecated individual params — use config instead
         max_iterations: int | None = None,
         compaction_settings: CompactionSettings | None = None,
@@ -143,6 +148,13 @@ class ALoop:
         self._last_usage_index: int | None = None
         self._compaction_failures: int = 0
 
+        # Reasoning controls — defaults; per-stream-call overrides applied
+        # transiently in stream() so they round-trip cleanly across calls.
+        self._default_thinking: str | None = thinking
+        self._default_reasoning_effort: str | None = reasoning_effort
+        self._thinking: str | None = thinking
+        self._reasoning_effort: str | None = reasoning_effort
+
     def _record_session_mode(self, session_id: str, mode_name: str) -> None:
         """Record session_id -> mode_name with FIFO eviction at cap.
 
@@ -189,6 +201,11 @@ class ALoop:
         fork_from: str | None = None,
         fork_at: str | None = None,
         replace_turn: str | None = None,
+        # Per-call reasoning overrides. None falls through to mode config
+        # and then to the constructor default. Pass "enabled" / "disabled"
+        # / "high" / "max" to override.
+        thinking: str | None = None,
+        reasoning_effort: str | None = None,
         # Deprecated — use session_id
         session_key: str | None = None,
         **kwargs,
@@ -343,6 +360,20 @@ class ALoop:
         self.provider = effective_provider
         self.compaction_settings = effective_compaction
         self.max_iterations = effective_max_iterations
+
+        # Reasoning controls — precedence: per-call kwarg > mode > constructor.
+        # `or`-chain works because None is the only falsy value we accept;
+        # "enabled"/"disabled"/"high"/"max" are all truthy.
+        self._thinking = (
+            thinking
+            or mode_config.get("thinking")
+            or self._default_thinking
+        )
+        self._reasoning_effort = (
+            reasoning_effort
+            or mode_config.get("reasoning_effort")
+            or self._default_reasoning_effort
+        )
 
         # Build tool context from explicit context dict + any legacy kwargs
         tool_context = self._build_tool_context(context=context, kwargs=kwargs)
@@ -529,14 +560,50 @@ class ALoop:
             })
 
             content = ""
+            reasoning = ""
             tool_calls: list[dict[str, Any]] = []
             turn_usage: dict | None = None
+            in_thinking = False
+
+            def _close_thinking():
+                nonlocal in_thinking
+                if in_thinking:
+                    end_evt = InferenceEvent.thinking_end()
+                    end_evt.session_id = effective_session_id
+                    end_evt.turn_id = turn_id
+                    in_thinking = False
+                    return end_evt
+                return None
 
             try:
-                async for delta in self._stream_completion(messages, system_prompt, tool_schemas, response_format=response_format):
+                async for delta in self._stream_completion(
+                    messages, system_prompt, tool_schemas,
+                    response_format=response_format,
+                    thinking=self._thinking,
+                    reasoning_effort=self._reasoning_effort,
+                ):
                     delta_type = delta.get("type")
 
-                    if delta_type == "text":
+                    if delta_type == "thinking":
+                        thinking_text = delta.get("text", "")
+                        if not thinking_text:
+                            continue
+                        reasoning += thinking_text
+                        if not in_thinking:
+                            start_evt = InferenceEvent.thinking_start()
+                            start_evt.session_id = effective_session_id
+                            start_evt.turn_id = turn_id
+                            in_thinking = True
+                            yield start_evt
+                        evt = InferenceEvent.thinking(thinking_text)
+                        evt.session_id = effective_session_id
+                        evt.turn_id = turn_id
+                        yield evt
+
+                    elif delta_type == "text":
+                        end_evt = _close_thinking()
+                        if end_evt is not None:
+                            yield end_evt
                         text_delta = delta["text"]
                         content += text_delta
                         accumulated_text += text_delta
@@ -546,6 +613,9 @@ class ALoop:
                         yield evt
 
                     elif delta_type == "tool_call_delta":
+                        end_evt = _close_thinking()
+                        if end_evt is not None:
+                            yield end_evt
                         self._accumulate_tool_call(tool_calls, delta)
 
                     elif delta_type == "usage":
@@ -580,6 +650,12 @@ class ALoop:
                     session.save_context()
                 return
 
+            # Close any unterminated thinking block at turn end (model emitted
+            # thinking but no follow-up text/tool_call before stream closed).
+            end_evt = _close_thinking()
+            if end_evt is not None:
+                yield end_evt
+
             # Compute per-turn token deltas and cost
             turn_input_tokens = self._input_tokens - turn_input_before
             turn_output_tokens = self._output_tokens - turn_output_before
@@ -608,6 +684,12 @@ class ALoop:
                 }
             else:
                 assistant_msg = {"role": "assistant", "content": content, "turn_id": turn_id}
+
+            # DeepSeek requires `reasoning_content` to round-trip when thinking
+            # is enabled. Persist on the assistant message; other OpenAI-compat
+            # providers ignore unknown fields.
+            if reasoning:
+                assistant_msg["reasoning_content"] = reasoning
 
             # Empty response guard — model returned no content and no tool_calls
             if not tool_calls and not content:
@@ -947,6 +1029,8 @@ class ALoop:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: dict | None = None,
+        thinking: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> RunResult:
         """One-shot completion. No tools, no session, no hooks, no compaction.
 
@@ -982,15 +1066,26 @@ class ALoop:
         text_parts: list[str] = []
         usage: dict = {}
 
+        # Reasoning controls — per-call kwargs > constructor default. (No mode
+        # path here; complete() doesn't accept a mode.)
+        eff_thinking = thinking or self._default_thinking
+        eff_reasoning_effort = reasoning_effort or self._default_reasoning_effort
+
         async for chunk in self._stream_completion(
             messages, sys_prompt, tools=None,
             response_format=response_format,
             temperature=temperature,
             max_tokens=max_tokens,
+            thinking=eff_thinking,
+            reasoning_effort=eff_reasoning_effort,
         ):
             ctype = chunk.get("type")
             if ctype == "text":
                 text_parts.append(chunk.get("text", ""))
+            elif ctype == "thinking":
+                # complete() returns final text only; reasoning is consumed
+                # but not surfaced (use stream() to see thinking events).
+                pass
             elif ctype == "usage":
                 usage = chunk.get("usage") or {}
             elif ctype == "error":
@@ -1337,6 +1432,8 @@ class ALoop:
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        thinking: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> AsyncIterator[dict]:
         payload: dict[str, Any] = {
             "model": self.model_config.id,
@@ -1361,6 +1458,14 @@ class ALoop:
 
         if self.provider.supports_provider_routing and self.model_config.provider_order:
             payload["provider"] = {"order": list(self.model_config.provider_order)}
+
+        # Reasoning controls (DeepSeek V4 and other reasoning-capable providers).
+        # Sent top-level; OpenAI-compatible endpoints that don't recognize them
+        # ignore unknown fields.
+        if thinking in ("enabled", "disabled"):
+            payload["thinking"] = {"type": thinking}
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
 
         headers = {"Authorization": f"Bearer {self.api_key}"}
         headers.update(self.provider.extra_headers)
@@ -1412,6 +1517,12 @@ class ALoop:
 
                             choice = (chunk.get("choices") or [{}])[0]
                             delta = choice.get("delta", {})
+
+                            # Reasoning/thinking stream (DeepSeek and other
+                            # reasoning models emit this alongside `content`).
+                            reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                            if reasoning:
+                                yield {"type": "thinking", "text": reasoning}
 
                             if delta.get("content"):
                                 yield {"type": "text", "text": delta["content"]}

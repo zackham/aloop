@@ -23,7 +23,8 @@ def _make_capturing_stream(captured: dict):
     """Return an async generator that records args/kwargs into *captured*."""
 
     async def _stream(messages, system_prompt, tools, response_format=None,
-                      *, temperature=None, max_tokens=None):
+                      *, temperature=None, max_tokens=None,
+                      thinking=None, reasoning_effort=None):
         captured.update({
             "messages": messages,
             "system_prompt": system_prompt,
@@ -31,6 +32,8 @@ def _make_capturing_stream(captured: dict):
             "response_format": response_format,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            "thinking": thinking,
+            "reasoning_effort": reasoning_effort,
         })
         yield {"type": "text", "text": "ok"}
         yield {"type": "usage", "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
@@ -194,7 +197,7 @@ async def test_passthrough_to_stream_completion():
 # complete() for every built-in tested provider. Mock-only; no network.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("provider_name", ["openrouter", "openai", "anthropic", "google", "groq"])
+@pytest.mark.parametrize("provider_name", ["openrouter", "openai", "anthropic", "google", "groq", "deepseek"])
 async def test_complete_works_with_provider(provider_name):
     backend = ALoop(
         model="some-model-id",

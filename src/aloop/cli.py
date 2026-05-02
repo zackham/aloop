@@ -139,6 +139,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                             help="Skip context injection")
     run_parser.add_argument("--max-iterations", type=int, default=50,
                             help="Max agent loop iterations (default: 50)")
+    run_parser.add_argument("--thinking", default=None,
+                            choices=["enabled", "disabled"],
+                            help="Reasoning toggle for thinking-capable models (e.g. DeepSeek V4)")
+    run_parser.add_argument("--reasoning-effort", default=None, dest="reasoning_effort",
+                            choices=["high", "max"],
+                            help="Reasoning effort level for thinking-capable models")
 
     # --- complete ---
     complete_parser = subparsers.add_parser(
@@ -168,6 +174,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     complete_parser.add_argument("--output-format", "-o", default="text",
                                  choices=["text", "json"],
                                  help="Output format: 'text' prints result.text; 'json' prints a one-line JSON blob")
+    complete_parser.add_argument("--thinking", default=None,
+                                 choices=["enabled", "disabled"],
+                                 help="Reasoning toggle for thinking-capable models")
+    complete_parser.add_argument("--reasoning-effort", default=None, dest="reasoning_effort",
+                                 choices=["high", "max"],
+                                 help="Reasoning effort level for thinking-capable models")
 
     # --- serve ---
     serve_parser = subparsers.add_parser("serve", help="Run as ACP server over stdio")
@@ -234,6 +246,7 @@ class StreamPrinter:
 
     def __init__(self):
         self._in_text = False
+        self._in_thinking = False
         self._accumulated = ""
 
     def _end_text(self):
@@ -241,11 +254,33 @@ class StreamPrinter:
             sys.stdout.write("\n")
             self._in_text = False
 
+    def _end_thinking(self):
+        if self._in_thinking:
+            sys.stdout.write(f"{_RESET}\n{_DIM}└─ thinking ─┘{_RESET}\n\n")
+            self._in_thinking = False
+
     def on_text(self, text: str):
+        if self._in_thinking:
+            self._end_thinking()
         sys.stdout.write(text)
         sys.stdout.flush()
         self._in_text = bool(text)
         self._accumulated += text
+
+    def on_thinking_start(self):
+        self._end_text()
+        sys.stdout.write(f"{_DIM}┌─ thinking ─┐\n{_RESET}")
+        sys.stdout.flush()
+        self._in_thinking = True
+
+    def on_thinking_delta(self, text: str):
+        if not self._in_thinking:
+            self.on_thinking_start()
+        sys.stdout.write(f"{_DIM}{text}{_RESET}")
+        sys.stdout.flush()
+
+    def on_thinking_end(self):
+        self._end_thinking()
 
     def on_tool_start(self, name: str, args: dict | None):
         self._end_text()
@@ -334,6 +369,15 @@ class JsonStreamPrinter:
         self._accumulated += text
         self._emit({"type": "text", "text": text})
 
+    def on_thinking_start(self):
+        self._emit({"type": "thinking_start"})
+
+    def on_thinking_delta(self, text: str):
+        self._emit({"type": "thinking_delta", "text": text})
+
+    def on_thinking_end(self):
+        self._emit({"type": "thinking_end"})
+
     def on_tool_start(self, name: str, args: dict | None):
         self._emit({"type": "tool_start", "name": name, "args": args})
 
@@ -379,6 +423,15 @@ class SilentPrinter:
 
     def on_text(self, text: str):
         self._accumulated += text
+
+    def on_thinking_start(self):
+        pass
+
+    def on_thinking_delta(self, text: str):
+        pass
+
+    def on_thinking_end(self):
+        pass
 
     def on_tool_start(self, name: str, args: dict | None):
         pass
@@ -453,6 +506,12 @@ async def run_once(backend, prompt, printer, **kwargs) -> dict | None:
             match event.type:
                 case EventType.TEXT_DELTA:
                     printer.on_text(event.data.get("text", ""))
+                case EventType.THINKING_START:
+                    printer.on_thinking_start()
+                case EventType.THINKING_DELTA:
+                    printer.on_thinking_delta(event.data.get("text", ""))
+                case EventType.THINKING_END:
+                    printer.on_thinking_end()
                 case EventType.TOOL_START:
                     printer.on_tool_start(
                         event.data.get("name", ""),
@@ -511,6 +570,8 @@ async def complete_once(
     max_tokens: int | None,
     response_format: dict | None,
     output_format: str,
+    thinking: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> int:
     """Run one ALoop.complete() call and emit the result to stdout.
 
@@ -584,12 +645,25 @@ async def complete_once(
 
     # --- Run completion ---
     try:
+        # Mode-level reasoning controls (only consulted when not overridden
+        # by explicit --thinking / --reasoning-effort).
+        eff_thinking = thinking
+        eff_reasoning_effort = reasoning_effort
+        if mode and (eff_thinking is None or eff_reasoning_effort is None):
+            mode_cfg_local = mode_cfg if mode else {}
+            if eff_thinking is None:
+                eff_thinking = mode_cfg_local.get("thinking")
+            if eff_reasoning_effort is None:
+                eff_reasoning_effort = mode_cfg_local.get("reasoning_effort")
+
         result = await aloop_instance.complete(
             prompt,
             system_prompt=sys_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
+            thinking=eff_thinking,
+            reasoning_effort=eff_reasoning_effort,
         )
     except InferenceError as e:
         sys.stderr.write(f"error: {e}\n")
@@ -664,6 +738,8 @@ async def _cmd_complete(args) -> int:
         max_tokens=args.max_tokens,
         response_format=response_format,
         output_format=args.output_format,
+        thinking=getattr(args, "thinking", None),
+        reasoning_effort=getattr(args, "reasoning_effort", None),
     )
 
 
@@ -1626,6 +1702,12 @@ async def _run_prompt(args):
 
     if args.no_context:
         stream_kw["inject_context"] = False
+
+    # --- Reasoning controls (for thinking-capable models e.g. DeepSeek V4) ---
+    if getattr(args, "thinking", None):
+        stream_kw["thinking"] = args.thinking
+    if getattr(args, "reasoning_effort", None):
+        stream_kw["reasoning_effort"] = args.reasoning_effort
 
     # --- Save as last session ---
     _save_state({"last_session": session_id})

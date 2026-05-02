@@ -141,7 +141,7 @@ If your use case is one of these, aloop is built for it. If it's something else,
 | **Declarative permissions** | **Yes — config-level tool sets + path restrictions** | No (extensions handle gating) | No | No |
 | **ACP server** | **Built-in** | No | Community adapter | Community adapter |
 | Interactive TUI | **No (use pi-mono)** | **Yes — rich, polished, mature** | No (terminal product) | No |
-| Provider count | 5 tested + any OpenAI-compatible | **18+, including CLI subscriptions** | Anthropic only | OpenAI-native |
+| Provider count | 6 tested + any OpenAI-compatible | **18+, including CLI subscriptions** | Anthropic only | OpenAI-native |
 | Language | Python | TypeScript/Bun | Python/TypeScript | Python/TypeScript |
 | Codebase size | ~8.5K LOC | ~74K LOC | Full product | Framework |
 | Custom tools | `@tool` decorator + hooks | TypeScript extensions | MCP + plugins + hooks | Functions + MCP |
@@ -225,13 +225,49 @@ See [ACP](docs/ACP.md).
 
 ### Any model, any provider
 
-5 tested providers (OpenRouter, OpenAI, Anthropic, Google, Groq) plus any OpenAI-compatible endpoint. Add custom providers in 4 lines of JSON, validate with `aloop providers validate`.
+6 tested providers (OpenRouter, OpenAI, Anthropic, Google, Groq, DeepSeek) plus any OpenAI-compatible endpoint. Add custom providers in 4 lines of JSON, validate with `aloop providers validate`.
 
 ```bash
 aloop --model x-ai/grok-4.1-fast "refactor this"
 aloop --provider openai --model gpt-4o "explain this"
+aloop --provider deepseek --model deepseek-v4-pro --thinking enabled --reasoning-effort max "hard problem"
 aloop --provider ollama --model llama3 "summarize this"
 ```
+
+### Reasoning / thinking modes
+
+Thinking-capable models (DeepSeek V4, future reasoning models) support optional thinking mode controlled per-call or per-mode:
+
+```bash
+# CLI
+aloop --provider deepseek --model deepseek-v4-pro --thinking enabled --reasoning-effort max "..."
+aloop complete --provider deepseek --model deepseek-v4-flash --thinking disabled "..."
+```
+
+```python
+# Python
+backend = ALoop(model="deepseek-v4-pro", provider="deepseek",
+                thinking="enabled", reasoning_effort="max")
+async for event in backend.stream("..."):
+    if event.type == EventType.THINKING_DELTA:
+        print(event.data["text"])  # streamed reasoning tokens
+```
+
+```jsonc
+// .aloop/config.json — bake into a mode
+{
+  "modes": {
+    "deepseek-pro-max": {
+      "provider": "deepseek",
+      "model": "deepseek-v4-pro",
+      "thinking": "enabled",
+      "reasoning_effort": "max"
+    }
+  }
+}
+```
+
+Precedence: per-call kwarg > mode > constructor default > server default. See [CONFIG.md](docs/CONFIG.md#reasoning--thinking-mode).
 
 ### Hooks — extend without forking the library
 
