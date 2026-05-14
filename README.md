@@ -1,3 +1,7 @@
+# Why
+
+![claude.ai uptime over the past 90 days](claude_uptime.jpg)
+
 # aloop
 
 An embeddable Python agent loop for **multi-agent orchestration**, **declarative permissions**, and **editor integration via ACP**. Use any LLM from any provider, extend through hooks, embed as a library, drive from the CLI, or expose as an ACP server.
